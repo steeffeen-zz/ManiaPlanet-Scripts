@@ -1,0 +1,1443 @@
+/**
+ *	Mode Obstacle
+ *
+ *	Do the best time on the map, by taking all the checkpoints before touching the goal
+ *	You will respawn at the last reached checkpoints spawn
+ *
+ *	Written by: steeffeen
+ */
+
+/*
+TODO:
+	- Switch zwischen Respawn- und Zeitbasiert
+		-> Top 5 des aktiven Modes für jeden Checkpoint
+	- XmlRpc callbacks
+*/
+
+#Extends "Modes/ShootMania/ModeBase.Script.txt"
+
+#Const CompatibleMapTypes	"ObstacleArena,TimeAttackArena"
+#Const ScriptName			"Obstacle.Script.txt"
+#Const Version				"2012-12-10"
+#Const VersionNr			"0.5.3"
+
+#Include "MathLib" as MathLib
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Layers.Script.txt" as Layers
+#Include "Libs/Nadeo/Chrono.Script.txt" as Chrono
+#Include "Libs/Nadeo/ObstacleTop.Script.txt" as OTop
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+#Include "Libs/Nadeo/ShootMania/Rules.Script.txt" as Rules
+
+/* -------------------------------------- */
+// Settings
+/* -------------------------------------- */
+#Setting S_TimeLimit				50		as _("Time limit (in minutes)")
+#Setting S_AllowCheckpointSpawns	True	as _("Allow respawn at checkpoints")
+#Setting S_NextMapVotingRatio		0.70	as _("Ratio needed for the next map voting")
+
+#Const C_LogEnabled					False		///< Enables/Disables log messages
+#Const C_UITickInterval				250 		///< Time between each UI refresh
+#Const C_NbTopTimes					5			///< Number of players in the top times UI
+#Const C_UseWeapons					True		///< Players can use weapons on theirself
+#Const C_ShowAlternativeScores		True		///< Show alternative scores (Times/Respawns)
+
+/* -------------------------------------- */
+// Globales
+/* -------------------------------------- */
+declare Text[Integer]		G_TopTimesNames;	///< Names of the players in TopTimes
+declare Integer[Integer]	G_TopTimesRuns;		///< Times of the players in TopTimes
+
+declare Integer G_CheckpointsTotal;				///< Total Number of checkpoints on the current map
+declare Boolean G_NextMapVotingEnabled;			///< If next map voting is enabled (only if valid values were entered)
+
+/* -------------------------------------- */
+// Extend
+/* -------------------------------------- */
+
+/* -------------------------------------- */
+// Server start
+/* -------------------------------------- */
+***StartServer***
+***
+log(ScriptName^" loaded!");
+log("Version: "^VersionNr^" (from "^Version^")");
+/* -------------------------------------- */
+// Set mode options
+UsePvPCollisions	= False;
+UsePvPWeapons		= False;
+UseClans			= False;
+
+// Setup top ratings
+OTop::SetLength(5);
+
+/* -------------------------------------- */
+// Create the rules
+declare ModeName = "Obstacle";
+declare ModeRules = """Individual mode
+
+- You must finish the obstacle course as fast as possible.
+- To validate a race you must touch the finish after going through all the checkpoints.
+- You can start over and improve your time as often as you want during {{{S_TimeLimit}}} minutes.
+- The player with the best time after {{{S_TimeLimit}}} minutes wins the map.
+
+- Press the respawn button (standard: Backspace) or die to respawn at the last reached checkpoint.
+- Press respawn again (in the spawn) to restart from the beginning.
+
+- Press F3 if you're ready for the next map (F4 for keeping the map).""";
+Rules::Create(ModeName, ModeRules);
+
+/* -------------------------------------- */
+// Create the UI layers
+declare LayerAttached	= False;
+declare LayerDetached	= False;
+declare LayerUpdated	= False;
+// UI All
+declare LayerScoresTableId		= Layers::Create("ScoresTable");
+declare LayerScoresInSpawnId	= Layers::Create("ScoresInSpawn");
+declare LayerTopTimesId			= Layers::Create("TopTimes");
+// UI Player
+declare LayerInfoId				= Layers::Create("Info");
+declare LayerNextMapVotingId	= Layers::Create("NextMapVoting");
+declare LayerRunInformationId	= Layers::Create("RunInformation");
+declare LayerChrono				= Layers::Create("Chrono");
+declare LayerTimeDiff			= Layers::Create("TimeDiff");
+declare TopsLayer				<=> UIManager.UILayerCreate();
+
+Layers::GetFromId(LayerScoresTableId).Type = CUILayer::EUILayerType::ScoresTable;
+Layers::GetFromId(LayerScoresInSpawnId).Type = CUILayer::EUILayerType::ScreenIn3d;
+
+Chrono::StartServer();
+***
+
+/* -------------------------------------- */
+// Map start
+/* -------------------------------------- */
+***StartMap***
+***
+/* -------------------------------------- */
+// New map message
+UIManager.UIAll.SendNotice(
+	"",
+	CUIConfig::ENoticeLevel::MatchInfo, 
+	Null, CUIConfig::EAvatarVariant::Default, 
+	CUIConfig::EUISound::StartRound, 0
+);
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+UIManager.UIAll.ScoreTableOnlyManialink = True;
+
+/* -------------------------------------- */
+// Attach and update layers
+LayerAttached = Layers::Attach("ScoresTable", NullId);
+LayerAttached = Layers::Attach("ScoresInSpawn", NullId);
+LayerAttached = Layers::Attach("TopTimes", NullId);
+LayerAttached = Layers::Attach("RunInformation", NullId);
+declare MLScoresTable = UpdateLayerScoresTable();
+LayerUpdated = Layers::Update("ScoresTable", MLScoresTable);
+LayerUpdated = Layers::Update("ScoresInSpawn", MLScoresTable);
+LayerUpdated = Layers::Update("TopTimes", "");
+UIManager.UIAll.UILayers.add(TopsLayer);
+
+/* -------------------------------------- */
+// Initalization
+OTop::MatchBegin();
+InitPlayers();
+G_TopTimesNames = Text[Integer];
+G_TopTimesRuns = Integer[Integer];
+declare LastUITick = 0;
+declare PrevScoresTotal = 0;
+
+foreach (Player in Players) {
+	declare LastCheckPoint for Player = NullId;
+	LastCheckPoint = NullId;
+	declare UI <=> UIManager.GetUI(Player);
+	if (UI != Null) {
+		declare netwrite Net_NextMapVotingReset for UI = 0;
+		Net_NextMapVotingReset = Now;
+	}
+}
+
+G_CheckpointsTotal = 0;
+foreach (BlockPole in BlockPoles) {
+	if (BlockPole.Tag == "Checkpoint") {
+		G_CheckpointsTotal += 1;
+	}
+}
+
+Mode::Ladder_OpenMatch_All();
+SM::SetupDefaultVisibility();
+
+StartTime = Now + 3000;
+EndTime = StartTime + (S_TimeLimit * 60 * 1000);
+declare LastTimeLimit = S_TimeLimit;
+***
+
+/* -------------------------------------- */
+// Initiate new players
+/* -------------------------------------- */
+***OnNewPlayer***
+***
+// Initialize LastCheckPoint
+declare LastCheckPoint for Player = NullId;
+LastCheckPoint = NullId;
+
+// Initialize MissedCheckpoints
+declare ShowMissedCheckpoints for Player = False;
+ShowMissedCheckpoints = False;
+
+// Initialize CheckpointsTimeLast
+declare CheckpointsTimeLast for Player = Integer[Ident];
+CheckpointsTimeLast.clear();
+
+// Initialize RespawnCount
+declare RespawnCount for Player = 0;
+RespawnCount = 0;
+UpdateLayerRunInformation(Player.Id, RespawnCount, CheckpointsTimeLast.count);
+
+declare UI <=> UIManager.GetUI(Player);
+if (UI != Null) {
+	UI.Hud3dMarkers = "";
+}
+***
+
+/* -------------------------------------- */
+// Initiate new spectators
+/* -------------------------------------- */
+***OnNewSpectator***
+***
+// Remove MissedCheckpoints markers
+declare UI <=> UIManager.GetUI(Spectator);
+if (UI != Null) {
+	UI.Hud3dMarkers = "";
+}
+
+UpdateLayerRunInformation(Spectator.Id, -1, -1);
+***
+
+/* -------------------------------------- */
+// Play loop
+/* -------------------------------------- */
+***PlayLoop***
+***
+/* -------------------------------------- */
+// Check for changed script settings
+if (S_TimeLimit != LastTimeLimit) {
+	EndTime = StartTime + (S_TimeLimit * 60 * 1000);
+	LastTimeLimit = S_TimeLimit;
+}
+// Check next map voting ratio
+if (S_NextMapVotingRatio > 0.0 && S_NextMapVotingRatio <= 1.0) {
+	G_NextMapVotingEnabled = True;
+} else {
+	G_NextMapVotingEnabled = False;
+}
+
+// Manage event
+foreach(Event in PendingEvents) {
+	switch (Event.Type) {
+		case CSmModeEvent::EType::OnArmorEmpty: {
+			if (C_LogEnabled) MB_Log("""'{{{Event.Victim.Login}}}' died!""");
+			RestartPlayer(Event.Victim.Id, 0);
+			Discard(Event);
+		}
+		case CSmModeEvent::EType::OnPlayerRequestRespawn: {
+			if (C_LogEnabled) MB_Log("""'{{{Event.Player.Login}}}' requests respawn!""");
+			RestartPlayer(Event.Player.Id, 1);
+			Discard(Event);
+		}
+		case CSmModeEvent::EType::OnHit: {
+			Discard(Event);
+		}
+		default: {
+			PassOn(Event);
+		}
+	}
+}
+
+/* -------------------------------------- */
+// Spawn players
+foreach (Player in Players) {			
+	if (Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned && !Player.RequestsSpectate) {
+		declare RunStartTime for Player = 0;
+		declare CheckpointLast for Player = NullId;
+		declare CheckpointsTimeLast for Player = Integer[Ident];
+		declare RespawnCount for Player = 0;
+		RespawnCount = 0;
+		RunStartTime = Now + 3000;
+		CheckpointLast = SM::GetSpawn("Spawn", 0).Id;
+		CheckpointsTimeLast.clear();
+		SM::SpawnPlayer(Player, 0, SM::GetSpawn("Spawn", 0));
+		DisableWeapon(Player.Id);
+		Chrono::Create(Player.Id);
+		Chrono::Start(Player.Id, 3000);
+		continue;
+	} else {
+		if (Player.RequestsSpectate) {
+			declare CheckpointsTimeLast for Player = Integer[Ident];
+			CheckpointsTimeLast.clear();
+			declare RespawnCount for Player = 0;
+			RespawnCount = 0;
+		}
+	}
+}
+
+/* -------------------------------------- */
+// Check finish or checkpoint
+foreach (Player in Players) {
+	declare CheckpointsTimeLast for Player = Integer[Ident];
+	
+	// Finish
+	if (Player.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned && Player.BlockPole != Null && Player.BlockPole.Tag == "Goal") {
+		declare CheckpointsDiff = G_CheckpointsTotal - CheckpointsTimeLast.count;
+		if (CheckpointsDiff <= 0) {
+			// All checkpoints activated
+			ActivateFinish(Player.Id);
+		} else {
+			// Missed some checkpoints
+			declare UI <=> UIManager.GetUI(Player);
+			if (UI != Null) {
+				declare StatusStopTime for Player = 0;
+				UI.BigMessageSound = CUIConfig::EUISound::Warning;
+				declare Message = """You missed {{{CheckpointsDiff}}} checkpoint""";
+				if (CheckpointsDiff == 1) {
+					Message ^= """!""";
+				} else {
+					Message ^= """s!""";
+				}
+				UI.BigMessage = "$f00"^Message;
+				StatusStopTime = Now + 1000;
+				ShowMissingCheckpoints(Player.Id);
+			}
+		}
+	}
+	
+	// Checkpoint
+	if (Player.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned && Player.BlockPole != Null && Player.BlockPole.Tag == "Checkpoint" && !CheckpointsTimeLast.existskey(Player.BlockPole.Id)) {
+		ActivateCheckpoint(Player.Id, Player.BlockPole.Id);
+	}
+}
+
+/* -------------------------------------- */
+// Calculate current next map votings
+declare CurrentPlayersNb = Players.count;
+declare CurrentVotingsNb = 0;
+foreach (CurrentPlayer in Players) {
+	declare CurrentUI <=> UIManager.GetUI(CurrentPlayer);
+	if (CurrentUI != Null) {
+		declare netread Net_NextMapVote for CurrentUI = 0;
+		switch (Net_NextMapVote) {
+			case 1: {
+				CurrentVotingsNb += 1;
+			}
+		}
+	}
+}
+declare CurrentPlayersVotingRemaining = MathLib::CeilingInteger(CurrentPlayersNb * S_NextMapVotingRatio) - CurrentVotingsNb;
+
+/* -------------------------------------- */
+// UI
+if (C_ShowAlternativeScores) {
+	TopsLayer.ManialinkPage = OTop::GetFrameTop(_(""), "-137  75", " RS");
+} else {
+	TopsLayer.ManialinkPage = "";
+}
+
+/* -------------------------------------- */
+// Update Player UI
+foreach (Player in Players) {
+	declare NewPlayer for Player = True;
+	declare NewSpectator for Player = False;
+	
+	/* -------------------------------------- */
+	// Update the layers when a new player arrives
+	if (NewPlayer) {
+		declare MLScoresTable = UpdateLayerScoresTable();
+		
+		LayerAttached = Layers::Attach("Info", Player.Id);
+		LayerAttached = Layers::Attach("TimeDiff", Player.Id);
+		LayerAttached = Layers::Attach("NextMapVoting", Player.Id);
+		LayerAttached = Layers::Attach("RunInformation", Player.Id);
+		LayerUpdated = Layers::Update("Info", CreateLayerInfo());
+		LayerUpdated = Layers::Update("NextMapVoting", CreateLayerNextMapVoting());
+		LayerUpdated = Layers::Update("RunInformation", CreateLayerRunInformation());
+		LayerUpdated = Layers::Update("TimeDiff", CreateLayerTimeDiff());
+		LayerUpdated = Layers::Update("ScoresTable", MLScoresTable);
+		LayerUpdated = Layers::Update("ScoresInSpawn", MLScoresTable);
+		UpdateLayerInfo(Player.Id);
+		
+		Chrono::Create(Player.Id);
+		
+		NewPlayer = False;
+		NewSpectator = True;
+	}
+	
+	/* -------------------------------------- */
+	// Refresh the status message of the player
+	declare StatusStopTime for Player = 0;
+	if (StatusStopTime >= 0 && StatusStopTime < Now) {
+		StatusStopTime = -1;
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI != Null) {
+			UI.BigMessage = "";
+		}
+	}
+	
+	// Update next map votings
+	UpdateLayerNextMapVoting(Player.Id, CurrentPlayersNb, CurrentVotingsNb, CurrentPlayersVotingRemaining);
+	
+	// Update run information
+	declare RespawnCount for Player = 0;
+	declare CheckpointsTimeLast for Player = Integer[Ident];
+	UpdateLayerRunInformation(Player.Id, RespawnCount, CheckpointsTimeLast.count);
+}
+
+/* -------------------------------------- */
+// Update Spectator UI
+foreach (Spectator in Spectators) {
+	declare NewPlayer for Spectator = False;
+	declare NewSpectator for Spectator = True;
+	
+	if (NewSpectator) {
+		NewPlayer = True;
+		NewSpectator = False;
+		LayerDetached = Layers::Detach("Info", Spectator.Id);
+		LayerDetached = Layers::Detach("Chrono", Spectator.Id);
+		LayerDetached = Layers::Detach("TimeDiff", Spectator.Id);
+		Chrono::Destroy(Spectator.Id);
+	}
+	
+	// Update scores table
+	declare LayerUpdated = False;
+	declare MLScoresTable = UpdateLayerScoresTable();
+	LayerUpdated = Layers::Update("ScoresTable", MLScoresTable);
+	LayerUpdated = Layers::Update("ScoresInSpawn", MLScoresTable);
+	
+	// Update next map voting
+	UpdateLayerNextMapVoting(Spectator.Id, CurrentPlayersNb, CurrentVotingsNb, CurrentPlayersVotingRemaining);
+	
+	// Update run information
+	UpdateLayerRunInformation(Spectator.Id, -1, -1);
+}
+
+/* -------------------------------------- */
+// Next map
+if (G_NextMapVotingEnabled && StartTime + 10000 <= Now && CurrentPlayersVotingRemaining <= 0 && PlayersNbTotal > 0) {
+	// Enough players voted for next map -> Skip this shit!
+	EndTime = Now;
+	if (C_LogEnabled) MB_Log("""Map has been skipped because of player votes!""");
+}
+if (Now >= EndTime) {
+	// Time ran out
+	MB_StopMap = True;
+}
+***
+
+/* -------------------------------------- */
+// Map end
+/* -------------------------------------- */
+***EndMap***
+***
+OTop::MatchEnd();
+
+// Reset next map votings
+foreach (Player in Players) {
+	declare UI <=> UIManager.GetUI(Player);
+	if (UI != Null) {
+		declare netwrite Net_NextMapVotingReset for UI = 0;
+		Net_NextMapVotingReset = Now;
+	}
+}
+
+MLScoresTable = UpdateLayerScoresTable();
+LayerUpdated = Layers::Update("ScoresTable", MLScoresTable);
+LayerUpdated = Layers::Update("ScoresInSpawn", MLScoresTable);
+declare WinnerId = NullId;
+declare Best = -1;
+declare Worst = -1;
+
+/* -------------------------------------- */
+// Search the user id of the winner
+foreach (Score in Scores) {
+	declare RunBest for Score = -1;
+	if ((RunBest > 0 && RunBest < Best) || (RunBest > 0 && Best == -1)) {
+		Best = RunBest;
+		WinnerId = Score.User.Id;
+	}
+	if (RunBest > Worst) {
+		Worst = RunBest;
+	}
+}
+
+/* -------------------------------------- */
+// Erase players messages
+foreach (Player in Players) {
+	declare UI <=> UIManager.GetUI(Player);
+	if (UI != Null) {
+		UI.BigMessage = "";
+		UI.StatusMessage = "";
+	}
+	Chrono::Reset(Player.Id);
+}
+
+/* -------------------------------------- */
+// Sort scores for the ladder
+foreach (Score in Scores) {
+	declare RunBest for Score = 1;
+	if (RunBest > 0) {
+		Score.LadderRankSortValue = RunBest;
+	} else {
+		Score.LadderRankSortValue = Worst + 1;
+	}
+	Score.Points *= -1;
+}
+
+Mode::Ladder_CloseMatch();
+
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+UIManager.UIAll.BigMessageSound = CUIConfig::EUISound::EndRound;
+if (Users.existskey(WinnerId)) {
+	UIManager.UIAll.BigMessage = """$<{{{Users[WinnerId].Name}}}$> wins the map!""";
+} else {
+	UIManager.UIAll.BigMessage = _("|Match|Draw");
+}
+sleep(3000);
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+sleep(7000);
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
+LayerDetached = Layers::Detach("ScoresTable", NullId);
+UIManager.UIAll.ScoreTableOnlyManialink = False;
+sleep(3000);		
+UIManager.UIAll.BigMessage = "";
+***
+
+/* -------------------------------------- */
+// Server end
+/* -------------------------------------- */
+***EndServer***
+***
+Chrono::EndServer();
+UIManager.UILayerDestroyAll();
+***
+
+
+/* -------------------------------------- */
+// Functions
+/* -------------------------------------- */
+/* ------------------------------------- */
+/** Determine closest respawn goal
+ *
+ *	@return		Ident of the closest goal
+ */
+Ident DetermineClosestSpawn(Ident _CheckPointId) {
+	if (_CheckPointId != NullId && BlockPoles.existskey(_CheckPointId)) {
+		declare Posi = BlockPoles[_CheckPointId].Position;
+		declare Ident ClosestSpawn;
+		declare ClosestDistance = 999999.9;
+		
+		foreach (Spawn in BlockSpawns) {
+			declare Distance = MathLib::Distance(Posi, Spawn.Position);
+			if (Distance < ClosestDistance) {
+				ClosestDistance = Distance;
+				ClosestSpawn = Spawn.Id;
+			}
+		}
+		
+		if (ClosestSpawn != SM::GetSpawn("Spawn", 0).Id) {
+			return ClosestSpawn;
+		}
+	}
+	
+	return NullId;
+}
+
+/* ------------------------------------- */
+/** Create the manialink with information about the current run
+ *
+ *	@return		The manialink Text
+ */
+Text CreateLayerRunInformation() {
+	return 
+"""<script><!--
+	main() {
+		declare Label_RunInformation1 <=> (Page.GetFirstChild("RunInformation1") as CMlLabel);
+		declare Label_RunInformation2 <=> (Page.GetFirstChild("RunInformation2") as CMlLabel);
+		
+		declare netread Net_HideRunInformation for UI = False;
+		declare netread Net_CheckPointCount for UI = 0;
+		declare LastCheckPointCount = 0;
+		declare netread Net_CheckPointTotal for UI = 0;
+		declare LastCheckPointTotal = 0;
+		declare netread Net_RespawnCount for UI = 0;
+		declare LastRespawnCount = 0;
+		
+		while (True) {
+			yield;
+			
+			if (Net_HideRunInformation) {
+				Label_RunInformation1.SetText("");
+				Label_RunInformation2.SetText("");
+			} else {
+				// Information 1
+				if (LastCheckPointCount != Net_CheckPointCount) {
+					LastCheckPointCount = Net_CheckPointCount;
+				}
+				if (LastCheckPointTotal != Net_CheckPointTotal) {
+					LastCheckPointTotal = Net_CheckPointTotal;
+				}
+				declare LabelText1 = "$FFF";
+				if (LastCheckPointCount >= 0) {
+					LabelText1 ^= "Current Checkpoint: "^LastCheckPointCount^"/"^LastCheckPointTotal;
+				}
+				Label_RunInformation1.SetText(LabelText1);
+			
+				// Information 2
+				if (LastRespawnCount != Net_RespawnCount) {
+					LastRespawnCount = Net_RespawnCount;
+				}
+				declare LabelText2 = "$FFF";
+				if (LastRespawnCount >= 0) {
+					LabelText2 ^= "Current Respawns: "^LastRespawnCount;
+				}
+				Label_RunInformation2.SetText(LabelText2);
+			}
+		}
+	}
+--></script>
+<frame posn="-47 -79">
+	<label posn="0 0" halign="center" valign="bottom" scale="0.6" text="Run information1" id="RunInformation1" />
+</frame>
+<frame posn="47 -79">
+	<label posn="0 0" halign="center" valign="bottom" scale="0.6" text="Run information2" id="RunInformation2" />
+</frame>
+""";
+}
+
+/* ------------------------------------- */
+/** Update the RunInformation Manialink for the given player
+ *
+ */
+Void UpdateLayerRunInformation(Ident _PlayerId, Integer _RespawnCount, Integer _CurrentCheckpoint) {
+	if (Players.existskey(_PlayerId)) {
+		declare UI <=> UIManager.GetUI(Players[_PlayerId]);
+		if (UI != Null) {
+			declare netwrite Net_HideRunInformation for UI = False;
+			Net_HideRunInformation = False;
+			
+			if (_CurrentCheckpoint != -1) {
+				declare netwrite Net_CheckPointCount for UI = -2;
+				Net_CheckPointCount = _CurrentCheckpoint;
+			}
+			if (G_CheckpointsTotal != -1) {
+				declare netwrite Net_CheckPointTotal for UI = -2;
+				Net_CheckPointTotal = G_CheckpointsTotal;
+			}
+			if (_RespawnCount != -1) {
+				declare netwrite Net_RespawnCount for UI = -2;
+				Net_RespawnCount = _RespawnCount;
+			}
+		}
+	} else {
+		if (Spectators.existskey(_PlayerId)) {
+			declare UI <=> UIManager.GetUI(Spectators[_PlayerId]);
+			if (UI != Null) {
+				declare netwrite Net_HideRunInformation for UI = False;
+				Net_HideRunInformation = True;
+				
+				if (_CurrentCheckpoint != -1) {
+					declare netwrite Net_CheckPointCount for UI = -2;
+					Net_CheckPointCount = _CurrentCheckpoint;
+				}
+				if (G_CheckpointsTotal != -1) {
+					declare netwrite Net_CheckPointTotal for UI = -2;
+					Net_CheckPointTotal = G_CheckpointsTotal;
+				}
+				if (_RespawnCount != -1) {
+					declare netwrite Net_RespawnCount for UI = -2;
+					Net_RespawnCount = _RespawnCount;
+				}
+			}
+		}
+	}
+}
+
+/* ------------------------------------- */
+/** Create the NextMapVoting manialink
+ *
+ *	@return		The manialink Text
+ */
+Text CreateLayerNextMapVoting() {
+return 
+"""<script><!--
+	#Include "TextLib" as TextLib
+	
+	main() {
+		declare Label_NextMapVoting <=> (Page.GetFirstChild("NextMapVoting") as CMlLabel);
+		
+		declare netread Net_NextMapVotingEnabled for UI = False;
+		declare netread Net_NextMapVotingReset for UI = 0;
+		declare LastNextMapVotingReset = 0;
+		declare netread Net_PlayersVotingNext for UI = 0;
+		declare netread Net_PlayersTotal for UI = 0;
+		declare netread Net_PlayersVotingRemaining for UI = 0;
+		
+		declare LastUIUpdate = 0;
+		
+		// Values: 1 - Next, 2 - Stay
+		declare netwrite Net_NextMapVote for UI = 0;
+		
+		while(True) {
+			yield;
+			
+			// Process events
+			
+			// Check for next map voting
+			if (Net_NextMapVotingReset > LastNextMapVotingReset) {
+				Net_NextMapVote = 0;
+				LastNextMapVotingReset = Net_NextMapVotingReset;
+			}
+			
+			foreach (Event in PendingEvents) {
+				switch (Event.Type) {
+					case CMlEvent::Type::KeyPress: {
+						if (Event.CharPressed == "2555904") {
+								// F3 Pressed
+								Net_NextMapVote = 1;
+						} else {
+							if (Event.CharPressed == "2621440") {
+								// F4 Pressed
+								Net_NextMapVote = 2;
+							}
+						}
+					}
+				}
+			}
+			
+			if (LastUIUpdate + 200 < Now) {
+				// Generate voting text
+				declare VotingText = "";
+				if (Net_NextMapVotingEnabled) {
+					if (Net_NextMapVote == 1) {
+						VotingText ^= "$5F2F4 for keeping the";
+					} else {
+						VotingText ^= "$050F3 for next";
+					}
+					VotingText ^= " map: "^Net_PlayersVotingNext^"/"^Net_PlayersTotal;
+					if (Net_PlayersVotingRemaining > 0) {
+						VotingText ^= " (-"^Net_PlayersVotingRemaining^")";
+					}
+				}
+				Label_NextMapVoting.SetText(VotingText);
+			}
+		}
+	}
+--></script>
+<frame posn="0 86">
+	<label posn="0 0" halign="center" valign="bottom" scale="0.7" text="" id="NextMapVoting" />
+</frame>
+""";
+}
+
+/* ------------------------------------- */
+/** Update the NextMapVoting manialink for the given player
+ *
+ */
+Void UpdateLayerNextMapVoting(Ident _PlayerId, Integer _PlayersTotal, Integer _PlayersVotingNext, Integer _PlayersVotingRemaining) {
+	declare CUIConfig UI;
+	if (Players.existskey(_PlayerId)) {
+		UI <=> UIManager.GetUI(Players[_PlayerId]);
+	} else {
+		if (Spectators.existskey(_PlayerId)) {
+			UI <=> UIManager.GetUI(Spectators[_PlayerId]);
+		}
+	}
+	if (UI != Null) {
+		declare netwrite Net_NextMapVotingEnabled for UI = True;
+		declare netwrite Net_PlayersTotal for UI = 0;
+		declare netwrite Net_PlayersVotingNext for UI = 0;
+		declare netwrite Net_PlayersVotingRemaining for UI = 0;
+		
+		Net_NextMapVotingEnabled = G_NextMapVotingEnabled;
+		Net_PlayersTotal = _PlayersTotal;
+		Net_PlayersVotingNext = _PlayersVotingNext;
+		Net_PlayersVotingRemaining = _PlayersVotingRemaining;
+	}
+}
+
+/* ------------------------------------- */
+/** Create the info manialink
+ *
+ *	@return		The manialink Text
+ */
+Text CreateLayerInfo() {
+return 
+"""<script><!--
+	#Include "TextLib" as TextLib
+	
+	main() {
+		declare Label_PosTotal <=> (Page.GetFirstChild("PosTotal") as CMlLabel);
+		declare Label_PosCurrent <=> (Page.GetFirstChild("PosCurrent") as CMlLabel);
+		declare Label_BestTime <=> (Page.GetFirstChild("BestTime") as CMlLabel);
+		declare Label_PrevTime <=> (Page.GetFirstChild("PrevTime") as CMlLabel);
+		declare netread Net_LayerInfoUpdated for UI = 0;
+		declare netread Net_PosTotal for UI = 0;
+		declare netread Net_PosCurrent for UI = 0;
+		declare netread Net_BestTime for UI = 0;
+		declare netread Net_PrevTime for UI = 0;
+		declare LayerInfoUpdated = 0;
+		declare PosTotal = 0;
+		declare PosCurrent = 0;
+		declare BestTime = 0;
+		declare PrevTime = 0;
+		declare LastUpdate = 0;
+		
+		while(True) {
+			yield;
+			if (LastUpdate + 500 <= Now) {
+				LastUpdate = Now;
+				if (LayerInfoUpdated != Net_LayerInfoUpdated) {
+					LayerInfoUpdated = Net_LayerInfoUpdated;
+			
+					PosTotal = Net_PosTotal;
+					PosCurrent = Net_PosCurrent;
+					BestTime = Net_BestTime;
+					PrevTime = Net_PrevTime;
+			
+					declare BestTimeString = "";
+					declare PrevTimeString = "";
+					declare PosCurrentString = "";
+					if (BestTime <= 0) {
+						BestTimeString = _("Best")^": --:--.--";
+					} else {
+						BestTimeString = _("Best")^": "^TextLib::TimeToText(BestTime, True);
+					}
+					if (PrevTime <= 0) {
+						PrevTimeString = _("Previous")^": --:--.--";
+					} else {
+						PrevTimeString = _("Previous")^": "^TextLib::TimeToText(PrevTime, True);
+					}
+					if (PosCurrent <= 0) {
+						PosCurrentString = "-";
+					} else {
+						PosCurrentString = ""^PosCurrent;
+					}
+			
+					Label_PosTotal.SetText("/"^PosTotal);
+					Label_PosCurrent.SetText(PosCurrentString);
+					Label_BestTime.SetText(BestTimeString);
+					Label_PrevTime.SetText(PrevTimeString);
+				}
+			}
+		}
+	}
+--></script>
+<frame posn="159 -89">
+	<label posn="-7 12" halign="left" valign="bottom" scale="0.8" text="/-" id="PosTotal" />
+	<label posn="-7 11" halign="right" valign="bottom" style="TextRaceChrono" scale="0.8" text="-" id="PosCurrent" />
+	<label posn="-2 7" sizen="40 6" halign="right" valign="bottom" scale="0.8" text="Best: --:--.--" id="BestTime" />
+	<label posn="-2 1" sizen="40 6" halign="right" valign="bottom" scale="0.8" text="Previous: --:--.--" id="PrevTime"/>
+</frame>
+""";
+}
+
+/* ------------------------------------- */
+/** Update the info manialink
+ *
+ * @param _PlayerId		The id of the player to update
+ */
+Void UpdateLayerInfo(Ident _PlayerId) {
+	if (Players.existskey(_PlayerId)) {
+		declare Player <=> Players[_PlayerId];
+		if (Player.Score != Null) {
+			declare UI <=> UIManager.GetUI(Player);
+			if (UI != Null) {
+				declare RunBest for Player.Score = -1;
+				declare RunLast for Player = -1;
+				declare Rank for Player.Score = -1;
+				declare netwrite Net_LayerInfoUpdated for UI = 0;
+				declare netwrite Net_PosTotal for UI = 0;
+				declare netwrite Net_PosCurrent for UI = 0;
+				declare netwrite Net_BestTime for UI = 0;
+				declare netwrite Net_PrevTime for UI = 0;
+		
+				Net_PosTotal = Scores.count;
+				Net_PosCurrent = Rank;
+				Net_BestTime = RunBest;
+				Net_PrevTime = RunLast;
+				Net_LayerInfoUpdated = Now;
+			}
+		}
+	}
+}
+
+/* ------------------------------------- */
+/** Create the timediff manialink
+ *
+ *	@return	The manialink Text
+ */
+Text CreateLayerTimeDiff() {	
+	return
+"""<script><!--
+	#Include "TextLib" as TextLib
+	
+	main() {
+		declare Frame_TimeDiff <=> (Page.GetFirstChild("TimeDiff") as CMlFrame);
+		declare Label_Diff <=> (Page.GetFirstChild("Diff") as CMlLabel);
+		declare Label_Time <=> (Page.GetFirstChild("Time") as CMlLabel);
+		declare netread Net_LayerTimeDiffUpdated for UI = 0;
+		declare netread Net_Time1 for UI = 0;
+		declare netread Net_Time2 for UI = 0;
+		declare LayerTimeDiffUpdated = 0;
+		declare ShowTimeDiff = False;
+		
+		while (True) {
+			yield;
+			
+			if (ShowTimeDiff && LayerTimeDiffUpdated + 3000 < ArenaNow) {
+				ShowTimeDiff = False;
+				Frame_TimeDiff.Hide();
+			}
+			
+			if (Net_LayerTimeDiffUpdated != LayerTimeDiffUpdated) {
+				LayerTimeDiffUpdated = Net_LayerTimeDiffUpdated;
+			
+				declare DiffString = "";
+				declare Diff = 0;
+				declare TimeString = TextLib::TimeToText(Net_Time1, True);
+
+				if (Net_Time1 < 0 || Net_Time2 < 0) {
+					// No reference time yet
+					DiffString = "";
+				} else {
+					Diff = Net_Time1 - Net_Time2;
+			
+					if (Diff < 0) {
+						DiffString = "$00f";
+					} else {
+						if (Diff == 0) {
+							DiffString = "$0f0";
+						} else {
+							DiffString = "$f00+";
+						}
+					}
+					DiffString ^= TextLib::TimeToText(Diff, True);
+				}
+			
+			
+				Label_Diff.SetText(DiffString);
+				Label_Time.SetText(TimeString);
+			
+				ShowTimeDiff = True;
+				Frame_TimeDiff.Show();
+			}
+		}
+	}
+--></script>
+<frame posn="0 60" id="TimeDiff">
+	<label posn="0 7" scale="1.4" halign="center" id="Time" />
+	<label posn="0 0" scale="1.1" halign="center" id="Diff" />
+</frame>
+""";
+}
+
+/* ------------------------------------- */
+/** Update the timediff manialink
+ *
+ *	@param _PlayerId	The id of the player to update
+ *	@param _Time1		The first time to compare (reference time)
+ *	@param _Time2		The second time to compare
+ */
+Void UpdateLayerTimeDiff(Ident _PlayerId, Integer _Time1, Integer _Time2) {	
+	if (Players.existskey(_PlayerId)) {
+		declare UI <=> UIManager.GetUI(Players[_PlayerId]);
+		if (UI != Null) {
+			declare netwrite Net_LayerTimeDiffUpdated for UI = 0;
+			declare netwrite Net_Time1 for UI = 0;
+			declare netwrite Net_Time2 for UI = 0;
+			Net_LayerTimeDiffUpdated = Now;
+			Net_Time1 = _Time1;
+			Net_Time2 = _Time2;
+		}
+	}
+}
+
+/* ------------------------------------- */
+/** Generate the ScoreTable manialink
+ *
+ * @return	The manialink Text
+ */
+Text UpdateLayerScoresTable() {
+	declare List = "";
+	declare Ranked = Integer[Integer];
+	declare Unranked = Integer[Integer];
+	declare Row = 0;
+	declare Col = 0;
+	declare RankingIndex = 0;
+	declare MaxTotal = 16;
+	declare MaxCol = 8;
+	
+	foreach (Score in Scores) {
+		declare RunBest for Score = -1;
+		if (RunBest >= 0) {
+			Ranked[RankingIndex] = RunBest;
+		} else {
+			Unranked[RankingIndex] = RunBest;
+		}
+		RankingIndex += 1;
+	}
+	
+	RankingIndex = 0;
+	Ranked = Ranked.sort();
+	foreach (Id => Value in Unranked) {
+		Ranked[Id] = Value;
+	}
+	foreach (ScoreId => Time in Ranked) {
+		if (Scores.existskey(ScoreId)) {
+			RankingIndex += 1;
+				
+			declare Rank for Scores[ScoreId] = -1;
+			if (Time >= 0) {
+				Rank = RankingIndex;
+			}
+	
+			if (RankingIndex <= MaxTotal) {
+				declare Pseudo = TextLib::MLEncode(Scores[ScoreId].User.Name);
+				declare Text Color;
+				if (Row % 2 == 0) {
+					Color = "111b";
+				} else {
+					Color = "222b";
+				}
+				declare Text FormatTime;
+				if (Time < 0) {
+					FormatTime = "--:--.--";
+					// Check if reached checkpoints should be shown instead of time
+					foreach (Player in Players) {
+						if (Player.Login == Scores[ScoreId].User.Login) {
+							declare CheckpointsTimeLast for Player = Integer[Ident];
+							if (CheckpointsTimeLast.count > 0) {
+								FormatTime = """{{{CheckpointsTimeLast.count}}} CP""";
+								if (CheckpointsTimeLast.count > 1) {
+									FormatTime ^= "s";
+								}
+							}
+							break;
+						}
+					}
+				} else {
+					FormatTime = TextLib::TimeToText(Time, True);
+				}
+	
+				List ^= 
+"""
+<frame posn="{{{Col * 82.2}}} {{{Row * -10}}}">
+	<quad posn="0 0 9" sizen="10 10" bgcolor="111f" />
+	<quad posn="10 0 9" sizen="70 10" bgcolor="{{{Color}}}" />
+	<label posn="5 -4.2 10" halign="center" valign="center" text="{{{RankingIndex}}}" />
+	<label posn="11 -4.2 10" sizen="50 10" textsize="4" halign="left" valign="center" text="$s{{{Pseudo}}}" />
+	<label posn="78 -4.2 10" sizen="15 10" halign="right" valign="center" text="{{{FormatTime}}}" />
+</frame>
+""";
+		
+				Row += 1;
+				if (Row % MaxCol == 0) {
+					Col += 1;
+					Row = 0;
+				}
+			}
+		}
+	}
+
+  return """
+<frame posn="0 0">
+	<quad posn="0 -2" sizen="165 92" halign="center" valign="center" style="Bgs1InRace" substyle="BgList" />
+	<label posn="-80 41" scale="0.5" halign="left" style="TextRankings" text="({{{G_CheckpointsTotal}}} Checkpoints)" />
+	<label posn="0 41" scale="0.8" halign="center" style="TextRankingsBig" text="Rankings" />
+	<frame posn="-81 34">
+		{{{List}}}
+	</frame>
+</frame>
+""";
+}
+
+/* -------------------------------------- */
+/** Generate the top times manialink
+ *
+ * @param _Name		The name of the player who made a time
+ * @param _Time		The new time
+ *
+ * @return	The manialink Text
+ */
+Text UpdateLayerTopTimes(Text _Name, Integer _Time) {
+	declare InsertNewTime = False;
+	declare TopTimesIndex = 0;
+	
+	if (G_TopTimesRuns.count < C_NbTopTimes) {
+		InsertNewTime = True;
+		TopTimesIndex = G_TopTimesRuns.count;
+	} else {
+		foreach (Index => Run in G_TopTimesRuns) {
+			if (_Time < Run) InsertNewTime = True;
+			TopTimesIndex = Index;
+		}
+	}
+	
+	if (InsertNewTime) {
+		G_TopTimesNames[TopTimesIndex] = _Name;
+		G_TopTimesRuns[TopTimesIndex] = _Time;
+	}
+	
+	G_TopTimesRuns = G_TopTimesRuns.sort();
+	
+	declare List = "";
+	declare Rank = 1;
+	
+	foreach (Id => Run in G_TopTimesRuns) {
+		if (G_TopTimesNames.existskey(Id)) {
+			List ^= 
+"""
+	<label posn="0 {{{Rank * -4}}} 5" sizen="5 5" scale="0.8" text="$s{{{Rank}}}." />
+	<label posn="5 {{{Rank * -4}}} 5" sizen="50 5" scale="0.8" text="$s{{{TextLib::MLEncode(G_TopTimesNames[Id])}}}" />
+	<label posn="48 {{{Rank * -4}}} 5" sizen="15 5" scale="0.8" text="{{{TextLib::TimeToText(Run, True)}}}" />
+""";
+			Rank += 1;
+		}
+	}
+	
+	return
+"""
+<frame posn="95 {{{-57 + G_TopTimesRuns.count * 4}}} 0">
+	{{{List}}}
+</frame>
+""";
+}
+
+/* -------------------------------------- */
+// Initialize the players
+Void InitPlayers() {
+	foreach (Player in Players) {
+		declare Integer			RunStartTime for Player;		///< StartTime of the current run
+		declare Integer			RunLast for Player;				///< Last time made by the player
+		declare Ident			CheckpointLast for Player;		///< Id of the last activated checkpoint
+		declare Integer[Ident]	CheckpointsTimeLast for Player;	///< Current time for each activated checkpoints
+		declare Integer			StatusStopTime for Player;		///< Status message stop time
+		declare Boolean			ShowMissedCheckpoints for Player;
+		declare Boolean			NewPlayer for Player;			
+		declare Boolean			NewSpectator for Player;
+		declare Integer			RespawnCount for Player;
+		
+		RunStartTime = 0;
+		RunLast = -1;
+		CheckpointLast = SM::GetSpawn("Spawn", 0).Id;
+		CheckpointsTimeLast.clear();
+		declare LastCheckPoint for Player = NullId;
+		LastCheckPoint = NullId;
+		StatusStopTime = 0;
+		NewPlayer = True;
+		NewSpectator = False;
+		ShowMissedCheckpoints = False;
+		RespawnCount = 0;
+	}
+	
+	foreach (Spectator in Spectators) {
+		declare Boolean	NewPlayer for Spectator;
+		declare Boolean NewSpectator for Spectator;
+		
+		NewPlayer = False;
+		NewSpectator = True;
+	}
+	
+	foreach (Score in Scores) {
+		declare Integer			RunBest for Score;				///< Best time made by the player
+		declare Integer[Ident]	CheckpointsTimeBest for Score;	///< Time on each checkpoint for the best run
+		declare Integer			Rank for Score;					///< Current rank of the player
+		CheckpointsTimeBest.clear();
+		RunBest = -1;
+		Rank = -1;
+		Score.RoundPoints = 0;
+		Score.Points = 0;
+	}
+}
+
+/* -------------------------------------- */
+/** Disable player weapons
+ *
+ * @param _PlayerId		Disable the weapons of this player id
+ */
+Void DisableWeapon(Ident _PlayerId) {
+	if (Players.existskey(_PlayerId) && !C_UseWeapons) {
+		Players[_PlayerId].AmmoGain = 0.;
+		SetPlayerAmmoMax(Players[_PlayerId], CSmMode::EWeapon::Laser, 0);
+		SetPlayerAmmoMax(Players[_PlayerId], CSmMode::EWeapon::Rocket, 0);
+		SetPlayerAmmoMax(Players[_PlayerId], CSmMode::EWeapon::Nucleus, 0);
+	}
+}
+
+/* -------------------------------------- */
+/** Restart a player
+ *
+ * @param _PlayerId		The player id to restart
+ * @param _RespawnType	Type of respawn (0: Death, 1: Backspace, 2: RestartAfterFinish)
+ */	
+Void RestartPlayer(Ident _PlayerId, Integer _RespawnType) {
+	if (Players.existskey(_PlayerId)) {
+		declare Player <=> Players[_PlayerId];
+		declare Delay = 3000;
+		declare LastCheckPoint for Player = NullId;
+		
+		// Check conditions for a full restart
+		declare FullRestart = False;
+		declare PlayerLastCheckPointSpawnId = DetermineClosestSpawn(LastCheckPoint);
+		switch (_RespawnType) {
+			case 0: {
+				// Death -> Use checkpoints
+			}
+			case 1: {
+				// Backspace -> Check for FullRestart
+				if (PlayerLastCheckPointSpawnId != NullId && BlockSpawns.existskey(PlayerLastCheckPointSpawnId)) {
+					if (MathLib::Distance(Player.Position, BlockSpawns[PlayerLastCheckPointSpawnId].Position) < 3.0) {
+						FullRestart = True;
+						if (C_LogEnabled) MB_Log("""backspace in spawn '{{{PlayerLastCheckPointSpawnId}}}': '{{{Player.Login}}}'""");
+					}
+				}
+			}
+			case 2: {
+				// Finish -> FullRestart
+				FullRestart = True;
+			}
+		}
+		if (PlayerLastCheckPointSpawnId != NullId && BlockSpawns.existskey(PlayerLastCheckPointSpawnId)) {
+			if (S_AllowCheckpointSpawns && LastCheckPoint != NullId && !FullRestart) {
+				// Respawn the player at the last reached checkpoint
+				
+				// Set respawn count for run information
+				declare RespawnCount for Player = 0;
+				RespawnCount += 1;
+				declare UI <=> UIManager.GetUI(Player);
+				if (UI != Null) {
+					declare netwrite Net_RespawnCount for UI = 0;
+					Net_RespawnCount = RespawnCount;
+				}
+				UpdateLayerRunInformation(Player.Id, RespawnCount, -1);
+			
+				SM::SpawnPlayer(Player, 0, BlockSpawns[PlayerLastCheckPointSpawnId], Now + Delay);
+				
+				if (C_LogEnabled) MB_Log("""respawn at checkpoint '{{{PlayerLastCheckPointSpawnId}}}': '{{{Player.Login}}}'""");
+				return;
+			}
+		}
+		
+		// FULL RESTART
+		
+		// Reset Hud3dMarkers (market missed checkpoints)
+		declare ShowMissedCheckpoints for Player = False;
+		ShowMissedCheckpoints = False;
+
+		// Respawn the player at the first spawn and restart its run
+		declare CheckpointLast for Player = NullId;
+		declare CheckpointsTimeLast for Player = Integer[Ident];
+		declare RunStartTime for Player = 0;
+		
+		CheckpointLast = SM::GetSpawn("Spawn", 0).Id;
+		SM::SpawnPlayer(Player, 0, BlockSpawns[CheckpointLast], Now + Delay);
+		
+		LastCheckPoint = NullId;
+		declare RespawnCount for Player = 0;
+		RespawnCount = 0;
+		
+		DisableWeapon(_PlayerId);
+		CheckpointsTimeLast.clear();
+		RunStartTime = Now + Delay;
+		
+		UpdateLayerRunInformation(Player.Id, RespawnCount, CheckpointsTimeLast.count);
+		
+		declare LayerUpdated = False;
+		declare MLScoresTable = UpdateLayerScoresTable();
+		LayerUpdated = Layers::Update("ScoresTable", MLScoresTable);
+		LayerUpdated = Layers::Update("ScoresInSpawn", MLScoresTable);
+		
+		Chrono::Start(_PlayerId, Delay);
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI != Null) {
+			// Reset Hud3dMarkers (market missed checkpoints)
+			UI.Hud3dMarkers = "";
+			
+			// Set respawn count for run information
+			declare netwrite Net_RespawnCount for UI = 0;
+			Net_RespawnCount = RespawnCount;
+		
+			UI.SendNotice(
+				"",	
+				CUIConfig::ENoticeLevel::PlayerInfo, 
+				Player.User, CUIConfig::EAvatarVariant::Default, 
+				CUIConfig::EUISound::PlayerHit, 0
+			);
+		}
+		if (C_LogEnabled) MB_Log("""restart: '{{{Player.Login}}}'""");
+	}
+}
+
+Void RestartPlayer(Ident _PlayerId) {
+	RestartPlayer(_PlayerId, 2);
+}
+
+/* -------------------------------------- */
+/** Mark missed checkpoints for the given player with Hud3dMarkers
+ *
+ * @param _PlayerId		The player who reached the finish without all checkpoints
+ */	
+Void ShowMissingCheckpoints(Ident _PlayerId) {
+	if (Players.existskey(_PlayerId)) {
+		declare Player <=> Players[_PlayerId];
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI != Null) {
+			declare CheckpointsTimeLast for Player = Integer[Ident];
+			declare CPMarkers = "";
+			foreach (BlockPole in BlockPoles) {
+				if (BlockPole.Tag == "Checkpoint" && !CheckpointsTimeLast.existskey(BlockPole.Id)) {
+					CPMarkers ^= """<marker label="$F00$wMissed Checkpoint" pos="{{{BlockPole.Position[0]}}} {{{BlockPole.Position[1]}}} {{{BlockPole.Position[2]}}}" />""";
+				}
+			}
+			UI.Hud3dMarkers = CPMarkers;
+			declare ShowMissedCheckpoints for Player = True;
+			ShowMissedCheckpoints = True;
+		}
+	}
+}
+
+/* -------------------------------------- */
+/** A player touch a checkpoint
+ *
+ * @param _PlayerId			The id of the player who touched the checkpoint
+ * @param _CheckpointId		The touched checkpoint id
+ */	
+Void ActivateCheckpoint(Ident _PlayerId, Ident _CheckpointId) {
+	if (Players.existskey(_PlayerId)) {
+		declare Player <=> Players[_PlayerId];
+	
+		declare CheckpointsTimeLast for Player = Integer[Ident];
+		declare CheckpointLast for Player = NullId;
+		declare RunStartTime for Player = 0;
+		CheckpointsTimeLast[_CheckpointId] = Now - RunStartTime;
+		CheckpointLast = _CheckpointId;
+	
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI != Null && Player.Score != Null) {
+			declare CheckpointsTimeBest for Player.Score = Integer[Ident];
+			declare TimeDiffStartTime for UI = 0;
+			declare BestTime = -1;
+		
+			declare LastCheckPoint for Player = NullId;
+			LastCheckPoint = _CheckpointId;
+		
+			if (CheckpointsTimeBest.existskey(_CheckpointId)) {
+				BestTime = CheckpointsTimeBest[_CheckpointId];
+			}
+			TimeDiffStartTime = Now;
+		
+			UpdateLayerTimeDiff(_PlayerId, CheckpointsTimeLast[_CheckpointId], BestTime);
+			UpdateLayerRunInformation(Player.Id, -1, CheckpointsTimeLast.count);
+		
+			declare CheckpointNb = TextLib::ToText(CheckpointsTimeLast.count);
+			declare Time = TextLib::TimeToText(CheckpointsTimeLast[_CheckpointId], True);
+			declare Color = "$00f";
+			declare Variant = 0;
+		
+			if (BestTime > -1 && CheckpointsTimeLast[_CheckpointId] > BestTime) {
+				Color = "$f00";
+				Variant = 1;
+			}
+			
+			declare LayerUpdated = False;
+			declare MLScoresTable = UpdateLayerScoresTable();
+			LayerUpdated = Layers::Update("ScoresTable", MLScoresTable);
+			LayerUpdated = Layers::Update("ScoresInSpawn", MLScoresTable);
+		
+			declare ShowMissedCheckpoints for Player = False;
+			if (ShowMissedCheckpoints) {
+				ShowMissingCheckpoints(Player.Id);
+			}
+		
+			UI.SendNotice(
+				"""Checkpoint {{{CheckpointNb}}}/{{{G_CheckpointsTotal}}}: $<{{{Color}}}{{{Time}}}$>""",
+				CUIConfig::ENoticeLevel::PlayerInfo, 
+				Players[_PlayerId].User, CUIConfig::EAvatarVariant::Default, 
+				CUIConfig::EUISound::Checkpoint, Variant
+			);
+		}
+	}
+}
+
+/* -------------------------------------- */
+/** A player touch the goal
+ *
+ * @param _PlayerId		The if of the player who touched the goal
+ */	
+Void ActivateFinish(Ident _PlayerId) {
+	if (Players.existskey(_PlayerId)) {
+		declare Player <=> Players[_PlayerId];
+		if (Player.Score != Null) {
+			declare LastCheckPoint for Player = NullId;
+			LastCheckPoint = NullId;
+	
+			declare RunStartTime for Player = 0;
+			declare RunLast for Player = -1;
+			declare RunBest for Player.Score = -1;
+			declare CheckpointsTimeLast for Player = Integer[Ident];
+			declare CheckpointsTimeBest for Player.Score = Integer[Ident];
+			declare RunNew = 0;
+			declare NewBestTime = "";
+	
+			if (C_LogEnabled) MB_Log("""{{{Player.Login}}} reached the finish!""");
+	
+			RunNew = Now - RunStartTime;
+			RunLast = RunNew;
+			Chrono::Stop(_PlayerId);
+			UpdateLayerTimeDiff(_PlayerId, RunNew, RunBest);
+	
+			if (RunNew < RunBest || RunBest <= 0) {
+				RunBest = RunNew;
+				CheckpointsTimeBest = CheckpointsTimeLast;
+				Player.Score.Points = RunBest;
+				NewBestTime = _("(New best time!)");
+			}
+	
+			declare LayerUpdated = False;
+			declare MLScoresTable = UpdateLayerScoresTable();
+			LayerUpdated = Layers::Update("ScoresTable", MLScoresTable);
+			LayerUpdated = Layers::Update("ScoresInSpawn", MLScoresTable);
+			LayerUpdated = Layers::Update("TopTimes", UpdateLayerTopTimes(Player.Name, RunNew));
+			
+			declare RespawnCount for Player = 0;
+			OTop::AddTops(Player, RespawnCount, RunNew);
+	
+			RestartPlayer(_PlayerId);
+	
+			declare UI <=> UIManager.GetUI(Player);
+			if (UI != Null) {
+				declare Time = TextLib::TimeToText(RunNew, True);
+				declare Variant = 1;
+				declare Color = "$f00";
+				declare Rank for Player.Score = 0;
+				declare StatusStopTime for Player = 0;
+		
+				if (NewBestTime != "") {
+					Variant = 0;
+					Color = "$00f";
+				}
+		
+				UI.SendNotice(
+					"""Finish: $<{{{Color}}}{{{Time}}}$> {{{NewBestTime}}}""",
+					CUIConfig::ENoticeLevel::PlayerInfo, 
+					Player.User, CUIConfig::EAvatarVariant::Default, 
+					CUIConfig::EUISound::Finish, Variant
+				);
+				UI.BigMessageSound = CUIConfig::EUISound::Silence;
+				UI.BigMessage = """Rank: {{{TextLib::ToText(Rank)}}}/{{{TextLib::ToText(Scores.count)}}}""";
+				StatusStopTime = Now + 3000;
+		
+				UpdateLayerInfo(_PlayerId);
+			}
+		}
+	}
+}

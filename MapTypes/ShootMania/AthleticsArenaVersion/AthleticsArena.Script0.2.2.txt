@@ -1,0 +1,553 @@
+/************************************
+*	MapType for Athletics Game Mode	*
+*	Author: steeffeen				*
+*	Contact: schteffens@gmail.com	*
+************************************/
+
+#RequireContext CSmMapType
+
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Anchor.Script.txt" as Anchor
+
+#Const	Version					"0.2.2 (2013-03-02)"
+
+#Const	C_LobbyName				"Lobby"
+#Const	C_DisciplineTypes		[1 => "LongJump", 2 => "HighJump", 3 => "Run", 4 => "Rounds"]
+
+declare Integer[Text] G_Disciplines;
+declare Integer[Text] G_Rounds;
+
+// Initializes all anchors to default
+Void InitAnchors() {
+	foreach (Anchor in AnchorData) {
+		Anchor.Tag = Anchor.DefaultTag;
+		Anchor.Order = Anchor.DefaultOrder;
+	}
+}
+
+// Check validity of discipline name
+Boolean CheckDisciplineNameIsValid(Text _Name) {
+	// Check name length
+	if (TextLib::Length(_Name) <= 0) {
+		return False;
+	}
+	
+	// Check for invalid chars
+	for (Index, 0, TextLib::Length(_Name)-1) {
+		switch (TextLib::SubString(_Name, Index, 1)) {
+			case ":": {
+				return False;
+			}
+		}
+	}
+	
+	return True;
+}
+
+// Extracts discipline of a goal tag
+Text GetDisciplineFromGoalTag(Text _Tag) {
+	for (Index, 0, TextLib::Length(_Tag)-1) {
+		if (TextLib::SubString(_Tag, Index, 1) == ":") {
+			return TextLib::SubString(_Tag, 0, Index);
+		}
+	}
+	return "";
+}
+
+// Extracts goal type of a tag
+Text GetGoalTypeFromTag(Text _Tag) {
+	for (Index, 0, TextLib::Length(_Tag)-1) {
+		if (TextLib::SubString(_Tag, Index, 1) == ":") {
+			return TextLib::SubString(_Tag, Index+2, TextLib::Length(_Tag)-2-Index);
+		}
+	}
+	return "";
+}
+
+// Assigns order for extra information to all goal anchors of a discipline
+Void AssignExtraOrder(Text _Discipline, Integer _Order) {
+	foreach (Anchor in AnchorData) {
+		if (Anchor.DefaultTag == "Goal" && _Discipline == GetDisciplineFromGoalTag(Anchor.Tag)) {
+			if ("Goal" == GetGoalTypeFromTag(Anchor.Tag)) {
+				Anchor.Order = _Order;
+			} else {
+				Anchor.Order = 0;
+			}
+		}
+	}
+}
+
+// Get created disciplines of the map
+Void GatherDisciplines() {
+	G_Disciplines.clear();	// Clear old disciplines
+	
+	foreach (Anchor in AnchorData) {
+		switch (Anchor.DefaultTag) {
+			// Disciplines are defined by spawns
+			case "Spawn": {
+				// Ignore default spawns and check name validity
+				if (Anchor.Tag != "Spawn" && Anchor.Tag != C_LobbyName && CheckDisciplineNameIsValid(Anchor.Tag)) {
+					if (!G_Disciplines.existskey(Anchor.Tag)) {
+						// New discipline found - Save name and type
+						G_Disciplines[Anchor.Tag] = Anchor.Order;
+					}
+				}
+			}
+		}
+	}
+}
+
+// Counts goals of a discipline
+Integer NumberOfDisciplineGoals(Text _Discipline, Text _GoalType) {
+	declare NbGoals = 0;
+	
+	foreach (Anchor in AnchorData) {
+		switch (Anchor.DefaultTag) {
+			case "Goal": {
+				// Only check goals
+				if (TextLib::SubString(Anchor.Tag, 0, TextLib::Length(_Discipline)) == _Discipline) {
+					// Goal belongs to the discipline
+					if (TextLib::SubString(Anchor.Tag, TextLib::Length(Anchor.Tag)-4, 4) == _GoalType) {
+						// Goal is a discipline goal
+						NbGoals += 1;
+					}
+				}
+			}
+		}
+	}
+	
+	return NbGoals;
+}
+
+// Check if the map is valid
+Void UpdateValidability() {
+	ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+	GatherDisciplines();
+	Anchor::UpdateAnchorCounts();
+	
+	// Check lobby
+	if (!Anchor::HasExactlyOneAnchor(C_LobbyName, 0, """You must place exactly one {{{C_LobbyName}}}!""")) return;
+	
+	// Check disciplines
+	foreach (Name => Type in G_Disciplines) {
+		// Check for ports
+		if (NumberOfDisciplineGoals(Name, "Port") != 1) {
+			// Missing port
+			ValidabilityRequirementsMessage = """You must place at exactly one {{{Name}}} port!""";
+			ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+			return;
+		}
+		
+		// Check for goals
+		switch (Type) {
+			case 3: {
+				// Run
+				if (NumberOfDisciplineGoals(Name, "Goal") < 1) {
+					// Missing finish
+					ValidabilityRequirementsMessage = """You must place at least one {{{Name}}} goal!""";
+					ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+					return;
+				}
+			}
+			case 4: {
+				// Rounds
+				if (NumberOfDisciplineGoals(Name, "Goal") < 2) {
+					// Missing checkpoints
+					ValidabilityRequirementsMessage = """You must place at least two {{{Name}}} checkpoints (goals)!""";
+					ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+					return;
+				}
+				// Check if rounds count is set
+				declare RoundsSet = True;
+				foreach (Anchor in AnchorData) {
+					if (Name == GetDisciplineFromGoalTag(Anchor.Tag) && "Spawn" != Anchor.DefaultTag && "Goal" == GetGoalTypeFromTag(Anchor.Tag)) {
+						if (Anchor.Order <= 0) {
+							RoundsSet = False;
+						}
+					}
+				}
+				if (!RoundsSet) {
+					// Rounds are not set!
+					ValidabilityRequirementsMessage = """You must set the amount of rounds for {{{Name}}}!""";
+					ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+					return;
+				}
+			}
+		}
+	}
+	
+	ValidabilityRequirementsMessage = "";
+	ValidationStatus = CSmMapType::ValidationStatus::Validated;
+}
+
+// Return the manialink for spawn anchor edition
+Text EditSpawnAnchorManialink(Ident _AnchorId) {
+	declare Manialink = """
+	<script><!--
+		#Include "TextLib" as TextLib
+		
+		#Const	C_DisciplineTypes		[""";
+	declare Index = 0;
+	foreach (Key => Name in C_DisciplineTypes) {
+		Manialink ^= """
+			{{{Key}}} => "{{{Name}}}" """;
+		if (Index < C_DisciplineTypes.count-1) {
+			Manialink ^= ",";
+		}
+		Index += 1;
+	}
+	Manialink ^= """]
+	
+		main() {
+			declare LobbyButton = (Page.GetFirstChild("{{{C_LobbyName}}}") as CMlLabel);
+			declare TypeButtons = [""";
+	Index = 0;
+	foreach (Type => Name in C_DisciplineTypes) {
+		Manialink ^= """"{{{Name}}}" => (Page.GetFirstChild("{{{Name}}}") as CMlLabel)""";
+		if (Index < C_DisciplineTypes.count-1) {
+			Manialink ^= ",";
+		}
+		Index += 1;
+	}
+	Manialink ^= """];
+			declare NameLabel = (Page.GetFirstChild("NameLabel") as CMlLabel);
+			declare NameEntry = (Page.GetFirstChild("NameEntry") as CMlEntry);
+			declare ExtraLabel = (Page.GetFirstChild("ExtraLabel") as CMlLabel);
+			declare ExtraEntry = (Page.GetFirstChild("ExtraEntry") as CMlEntry);
+			
+			declare Integer AnchorOrder for Page;
+			declare Text AnchorTag for Page;
+			declare Text ExtraText for Page;
+			declare Boolean Finish for Page;
+			
+			declare LocalAnchorOrder = AnchorOrder;
+			if (AnchorTag != "Spawn" && AnchorTag != "{{{C_LobbyName}}}") {
+				NameEntry.Value = AnchorTag;
+			}
+			
+			if (ExtraText != "") {
+				ExtraLabel.Visible = True;
+				ExtraEntry.Visible = True;
+				ExtraEntry.Value = ExtraText;
+			}
+			
+			Finish = False;
+			while (!Finish) {
+				yield;
+				
+				if (!C_DisciplineTypes.existskey(LocalAnchorOrder)) {
+					LobbyButton.Value = "$090"^LobbyButton.ControlId;
+					foreach (Button in TypeButtons) {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+					NameLabel.Visible = False;
+					NameEntry.Visible = False;
+					ExtraLabel.Visible = False;
+					ExtraEntry.Visible = False;
+				} else {
+					LobbyButton.Value = "$fff"^LobbyButton.ControlId;
+					foreach (Button in TypeButtons) {
+						if (Button.ControlId == C_DisciplineTypes[LocalAnchorOrder]) {
+							Button.Value = "$090"^Button.ControlId;
+						} else {
+							Button.Value = "$fff"^Button.ControlId;
+						}
+					}
+					NameLabel.Visible = True;
+					NameEntry.Visible = True;
+					ExtraLabel.Value = C_DisciplineTypes[LocalAnchorOrder]^":";
+				}
+				
+				foreach (Index => Event in PendingEvents) {
+					switch (Event.Type){
+						case CMlEvent::Type::MouseClick: {
+							switch (Event.ControlId) {
+								case "Cancel": {
+									Finish = True;
+								}
+								case "Okay": {
+									Finish = True;
+									if (LocalAnchorOrder == 0) {
+										AnchorTag = "{{{C_LobbyName}}}";
+										AnchorOrder = LocalAnchorOrder;
+									} else {
+										if (NameEntry.Value != "") {
+											AnchorTag = NameEntry.Value;
+											AnchorOrder = LocalAnchorOrder;
+											ExtraText = ExtraEntry.Value;
+										}
+									}
+								}""";
+	Manialink ^= """
+		case "{{{C_LobbyName}}}": {
+			LocalAnchorOrder = 0;
+		}""";
+	foreach (Type => Name in C_DisciplineTypes) {
+		Manialink ^= """
+			case "{{{Name}}}": {
+				LocalAnchorOrder = {{{Type}}};""";
+		switch (Name) {
+			case "Rounds": {
+				Manialink ^= """
+					ExtraLabel.Visible = True;
+					ExtraLabel.Value = "{{{Name}}}:";
+					ExtraEntry.Visible = True;""";
+			}
+			default: {
+				Manialink ^= """
+					ExtraLabel.Visible = False;
+					ExtraEntry.Visible = False;""";
+			}
+		}
+		Manialink ^= """
+			}""";
+	}
+	Manialink ^= """		}
+						}
+					}
+				}
+			}
+		}			
+	--></script>
+	<frame posn="120 45">
+		<quad posn="0 0 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffEdit Spawn" />
+		
+		<quad posn="0 0 -1" sizen="70 {{{C_DisciplineTypes.count*7+29}}}" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<frame posn="0 -13">
+			<label id="{{{C_LobbyName}}}" posn="0 10" scale="1.8" textprefix="$o" halign="center" style="TextButtonSmall" ScriptEvents="true"/>""";
+	Index = 0;
+	foreach (Type => Name in C_DisciplineTypes) {
+		if (Index % 2 == 0) {
+			Manialink ^= """
+				<label id="{{{Name}}}" posn="-1 {{{3-(Index/2)*6}}}" scale="1.5" textprefix="$o" halign="right" style="TextButtonSmall" ScriptEvents="true"/>""";
+		} else {
+			Manialink ^= """
+				<label id="{{{Name}}}" posn="1 {{{3-(Index/2)*6}}}" scale="1.5" textprefix="$o" halign="left" style="TextButtonSmall" ScriptEvents="true"/>""";
+		}
+		Index += 1;
+	}
+	Manialink ^= """
+			<label id="NameLabel" posn="-32 {{{-0.5-(C_DisciplineTypes.count-2.5)*7}}}" text="Discipline:" scale="0.8" halign="left"/>
+			<entry id="NameEntry" posn="-13 {{{-(C_DisciplineTypes.count-2.5)*7}}}" sizen="42 5" halign="left" ScriptEvents="true"/>
+			<label id="ExtraLabel" posn="-32 {{{-7.5-(C_DisciplineTypes.count-2.5)*7}}}" scale="0.8" halign="left" hidden="1"/>
+			<entry id="ExtraEntry" posn="-13 {{{-7-(C_DisciplineTypes.count-2.5)*7}}}" sizen="42 5" halign="left" ScriptEvents="true" hidden="1"/>
+			
+			<label id="Okay" text="Okay" posn="0 {{{-8-(C_DisciplineTypes.count-1.3)*7}}}" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+			<label id="Cancel" text="Cancel" posn="0 {{{-8-(C_DisciplineTypes.count-0.3)*7}}}" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+		</frame>
+    </frame>""";
+	return Manialink;
+}
+
+// Return the manialink for goal anchor edition
+Text EditGoalAnchorManialink(Ident _AnchorId) {
+	declare Manialink = """
+	<script><!--
+		#Include "TextLib" as TextLib
+		
+		main() {
+			declare DisciplineButtons = [""";
+	declare Index = 0;
+	foreach (Name => Type in G_Disciplines) {
+		Manialink ^= """"{{{Name}}}" => (Page.GetFirstChild("{{{Name}}}") as CMlLabel)""";
+		if (Index < G_Disciplines.count-1) {
+			Manialink ^= ",";
+		}
+		Index += 1;
+	}
+	Manialink ^= """];
+			declare PortLabel <=> (Page.GetFirstChild("Port") as CMlLabel);
+			declare GoalLabel <=> (Page.GetFirstChild("Goal") as CMlLabel);
+			
+			declare Integer AnchorOrder for Page;
+			declare Text AnchorTag for Page;
+			declare Boolean Finish for Page;
+			
+			declare Text DisciplineName;
+			declare Text GoalType;
+			for (Index, 0, TextLib::Length(AnchorTag)-1) {
+				switch (TextLib::SubString(AnchorTag, Index, 1)) {
+					case ":": {
+						DisciplineName = TextLib::SubString(AnchorTag, 0, Index);
+						GoalType = TextLib::SubString(AnchorTag, Index+2, TextLib::Length(AnchorTag)-2-Index);
+						break;
+					}
+				}
+			}
+			if (AnchorTag != "Goal") {
+				if (GoalType != "Port" && GoalType != "Goal") {
+					GoalType = "Port";
+				}
+			}
+			
+			Finish = False;	
+			while (!Finish) {
+				yield;
+				
+				foreach (Button in DisciplineButtons) {
+					if (DisciplineName == Button.ControlId) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				switch (GoalType) {
+					case "Port": {
+						PortLabel.Value = "$009"^PortLabel.ControlId;
+						GoalLabel.Value = "$fff"^GoalLabel.ControlId;
+					}
+					case "Goal": {
+						PortLabel.Value = "$fff"^PortLabel.ControlId;
+						GoalLabel.Value = "$009"^GoalLabel.ControlId;
+					}
+					default: {
+						PortLabel.Value = "$fff"^PortLabel.ControlId;
+						GoalLabel.Value = "$fff"^GoalLabel.ControlId;
+					}
+				}
+				
+				foreach (Index => Event in PendingEvents) {
+					switch (Event.Type){
+						case CMlEvent::Type::MouseClick: {
+							switch (Event.ControlId) {
+								case "Cancel": {
+									Finish = True;
+								}
+								case "Okay": {
+									Finish = True;
+									AnchorTag = DisciplineName^": "^GoalType;
+								}
+								case "Port": {
+									GoalType = Event.ControlId;
+								}
+								case "Goal": {
+									GoalType = Event.ControlId;
+								}
+								default: {
+									DisciplineName = Event.ControlId;
+								}
+							}
+						}	
+					}
+				}
+			}
+		}			
+	--></script>
+	<frame posn="120 45">
+		<quad posn="0 0 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffEdit Spawn" />
+		
+		<quad posn="0 0 -1" sizen="70 {{{((G_Disciplines.count+1)/2)*6+28}}}" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<frame posn="0 -13">""";
+	Index = 0;
+	foreach (Name => Type in G_Disciplines) {
+		if (Index % 2 == 0) {
+			Manialink ^= """
+				<label id="{{{Name}}}" textprefix="$o" sizen="25 3" posn="-1 {{{10-(Index/2)*6}}}" scale="1.5" halign="right" style="TextButtonSmall" ScriptEvents="true"/>""";
+		} else {
+			Manialink ^= """
+				<label id="{{{Name}}}" textprefix="$o" posn="1 {{{10-(Index/2)*6}}}" sizen="25 3" scale="1.5" halign="left" style="TextButtonSmall" ScriptEvents="true"/>""";
+		}
+		Index += 1;
+	}
+	Manialink ^= """
+			<label id="Port" text="Port" posn="-1 {{{8-((G_Disciplines.count+1)/2)*6}}}" halign="right" textprefix="$o" scale="1.6" style="TextButtonSmall" ScriptEvents="true"/>
+			<label id="Goal" text="Goal" posn="1 {{{8-((G_Disciplines.count+1)/2)*6}}}" halign="left" textprefix="$o" scale="1.6" style="TextButtonSmall" ScriptEvents="true"/>
+			
+			<label id="Okay" text="Okay" posn="0 {{{2-((G_Disciplines.count+1)/2)*6}}}" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+			<label id="Cancel" text="Cancel" posn="0 {{{-5-((G_Disciplines.count+1)/2)*6}}}" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+		</frame>
+    </frame>""";
+	return Manialink;
+}
+
+// Show the anchor edition manialink
+Void EditAnchorData(Ident _EditedAnchorDataId) {
+	declare Integer AnchorOrder for ManialinkPage;
+	declare Text AnchorTag for ManialinkPage;
+	declare Text ExtraText for ManialinkPage;
+	declare Boolean Finish for ManialinkPage;
+	Finish = False;
+	
+	AnchorOrder = AnchorData[_EditedAnchorDataId].Order;
+	AnchorTag = AnchorData[_EditedAnchorDataId].Tag;
+	if (G_Disciplines.existskey(AnchorTag) && G_Disciplines[AnchorTag] == 4) {
+		if (G_Rounds.existskey(AnchorTag)) {
+			ExtraText = ""^G_Rounds[AnchorTag];
+		} else {
+			ExtraText = ""^2;
+		}
+	} else {
+		ExtraText = "";
+	}
+	
+	switch (AnchorData[_EditedAnchorDataId].DefaultTag) {
+		case "Spawn": {
+			ManialinkText = EditSpawnAnchorManialink(_EditedAnchorDataId);
+		}
+		case "Goal": {
+			if (G_Disciplines.count > 0) {
+				ManialinkText = EditGoalAnchorManialink(_EditedAnchorDataId);
+			} else {
+				Finish = True;
+			}
+		}
+	}
+	
+	while (!Finish) {
+		yield;
+	}
+	
+	switch (AnchorData[_EditedAnchorDataId].DefaultTag) {
+		case "Spawn": {
+			if (CheckDisciplineNameIsValid(AnchorTag)) {
+				AnchorData[_EditedAnchorDataId].Tag = AnchorTag;
+				AnchorData[_EditedAnchorDataId].Order = AnchorOrder;
+				if (AnchorOrder == C_DisciplineTypes.keyof("Rounds") && TextLib::ToInteger(ExtraText) > 0) {
+					G_Rounds[AnchorTag] = TextLib::ToInteger(ExtraText);
+					AssignExtraOrder(AnchorTag, G_Rounds[AnchorTag]);
+				}
+			}
+		}
+		case "Goal": {
+			AnchorData[_EditedAnchorDataId].Tag = AnchorTag;
+			if ("Port" == GetGoalTypeFromTag(AnchorTag)) {
+				AnchorData[_EditedAnchorDataId].Order = 0;
+			} else {
+				declare Discipline = GetDisciplineFromGoalTag(AnchorTag);
+				if (G_Rounds.existskey(Discipline)) {
+					AssignExtraOrder(Discipline, G_Rounds[Discipline]);
+				}
+			}
+		}
+	}
+
+	ManialinkText = "";
+}
+
+// Main
+main() {
+	log("AthleticsArena.Script.txt loaded!");
+
+	CustomEditAnchorData = True;
+	GatherDisciplines();
+	UpdateValidability();
+	
+	while (True) {
+		yield;
+		
+		foreach (Index => Event in PendingEvents) {
+			switch (Event.Type) {
+				case CPluginEvent::Type::MapModified: {
+					UpdateValidability();
+				}
+				case CPluginEvent::Type::EditAnchor: {
+					EditAnchorData(Event.EditedAnchorDataId);
+					UpdateValidability();
+				}
+			}
+		}		
+	}	
+}

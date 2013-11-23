@@ -1,0 +1,24 @@
+/****************************************
+*	MapType Base Script					*
+*	Author: steeffeen					*
+*	Contact: steeffeen@team-devota.com	*
+****************************************/
+
+#RequireContext CSmMapType
+
+/********************
+	MAIN
+********************/
+
+main() {
+	+++LogVersion+++
+	+++StartScript+++
+	
+	while (True) {
+		yield;
+		
+		+++Loop+++
+	}
+	
+	+++EndScript+++
+}

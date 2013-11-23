@@ -1,0 +1,1612 @@
+/* -------------------------------- */
+//	GoldenDunk Game Mode			//
+//	Author: steeffeen				//
+//	Contact: schteffens@gmail.com	//
+/* -------------------------------- */
+
+#Extends "Modes/ShootMania/ModeBase.Script.txt"
+
+#Const ScriptName				"Obstacle.Script.txt"
+#Const	CompatibleMapTypes	"GoldenDunkArena"
+#Const	Version				"1.1 (2013-04-13)"
+
+/* INCLUDES */
+#Include "MathLib" as MathLib
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Color.Script.txt" as Color
+#Include "Libs/Nadeo/Interface.Script.txt" as Interface
+#Include "Libs/Nadeo/Top.Script.txt" as Top
+#Include "Libs/Nadeo/Victory.Script.txt" as Victory
+#Include "Libs/Nadeo/ShootMania/Achievements.Script.txt" as Achievements
+#Include "Libs/Nadeo/ShootMania/BalancedWeapons.Script.txt" as BalancedWeapons
+#Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+#Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
+
+/* SETTINGS */
+// Round settings
+#Setting	S_TimeLimit			240		as _("Time limit per round (seconds)")
+#Setting	S_RoundsToWin		3		as _("Rounds to win a map")
+#Setting	S_RoundGapToWin		1		as _("Rounds gap to win a map")
+#Setting	S_RoundsLimit		7		as _("Total rounds limit per map (First team reaching X wins)")
+// Team settings
+#Setting	S_AutoTeamBalance	False	as _("Automatically balance teams before each map")
+// Gameplay settings
+#Setting	S_ForceBallCount	0		as _("Force a specific number of balls (0 = dynamic count)")
+#Setting	S_FriendlyFire		False	as _("Friendly fire (Damage team members)")
+#Setting	S_LaserBattle		False	as _("Laser Battle (Rail gun for every player)")
+
+/* CONSTANTS */
+// Gameplay constants
+#Const	C_RespawnTime				3500		// Time until a player is respawned
+#Const	C_BallPickUpDistance		2.1			// Distance to pick up balls
+#Const	C_PointsForScoring			3			// Points granted if a player scores
+#Const	C_CommandPostCaptureTime	30000		// Time to fully capture a command post
+#Const	C_CommPostActivationRatio	0.75		// Needed ratio to activate a command post
+#Const	C_BallResetTime				5000		// Time until a dropped ball will reset
+#Const	C_NormalExtraAmmoGain		0.0			// Additional ammunition gain when running normal battle
+#Const	C_InstaGibExtraAmmoGain		0.5			// Additional ammunition gain when running instagib battle
+#Const	C_OnlyHighlightBallCarriers	False		// Enable to highlight ball carriers only (otherwise all players)
+#Const	C_UseKillCam				True		// Shows the players who has eliminated you
+// UI constants
+#Const	C_UITickInterval			400			// Interval of UI refreshes
+#Const	C_UseTops					True		// Enable/disable top x rankings
+#Const	C_TopCount					5			// Count of players displayed in top rankings
+#Const	C_HideStuffAtMapEnd			True		// Enable to hide top rankings & stuff at map end
+#Const	C_TeamInformationAtTop		True		// Disable to show balls and command post at bottom right
+#Const	C_UseAchievements			True		// Enable/disable achievements (may spam your screen!)
+#Const	C_UseSimpleTeamsLayer		False		// Enable/disable simple teams layer (playercounts at the top)
+#Const	C_NbTeamHitMessage			3			// Times the team hit warning appears (0: deactivated, -1: endless)
+#Const	C_NearMissDist				1.0			// Max distance (meters) for near miss messages (Range: 0.0-1.0)
+// Clublink constants
+#Const	C_UsePlayerClublinks		True		// Enable use of player clublinks
+#Const	C_NeutralEmblemUrl			""			// Neutral emblem URL
+
+/* TEXTS */
+#Const	T_Ball				"Ball"										// Ball text
+#Const	T_Balls				"Balls"										// Balls text
+#Const	T_GoldenGoal		"Golden Dunk"								// Golden dunk text
+#Const	T_CommandPost		"Command Post"								// Command post text
+#Const	T_WaitForSpawn		"Waiting to be spawned..."					// Waiting for spawn message
+#Const	T_TeamHitMessage	"$f81Attention! You shot a team member!"	// Warning when hitting a team member
+// Top ranking names
+#Const	T_Damage			"Damage"
+#Const	T_Scores			"Scores"
+#Const	T_Engineer			"Engineer"
+#Const	T_Backstabber		"Backstabber"
+// Description
+#Const	Description			"$n- Two teams fight for Balls in order to score at the opponents hoop.\n- Grab a Ball and get it into the enemys hoop to score."
+
+/* GLOBALES */
+declare Integer G_LastUIUpdate;					// Time when the last UI refresh was performed
+declare Integer G_LastBigMessage;				// Time when the last BigMessage was send
+declare Integer G_LastStatusMessage;			// Time when the last StatusMessage was send
+declare Integer G_BallsCount;					// Number of available balls
+declare Integer[Integer] G_ClanPoints;			// Current score of each clan
+declare Ident[] G_BallsPolesIDs;				// IDs of the balls poles
+declare Ident[Integer] G_CommandPostIDs;		// IDs of the command post poles
+declare Text[Integer] G_CommandPostMarkers;		// Markers for the command posts
+declare Ident[] G_ActiveCommandPostIDs;			// IDs of active command posts
+declare Integer[Ident] G_BallsPerPole;			// Number of balls per pole
+declare Ident[Integer] G_ClanSpawnIDs;			// BlockSpawn IDs of each clan
+declare Real[Integer] G_HoopCenterXPositions;	// Hoop position of each clan
+declare Real[Integer] G_HoopCenterZPositions;	// Hoop position of each clan
+declare Text[Integer] G_ClanDefendMarkers;		// Defend markers of each clan
+declare Text[Integer] G_ClanAttackMarkers;		// Attack markers of each clan
+declare Ident[] G_BallCarryingPlayerIDs;		// IDs of all players that have a ball
+declare Vec3[] G_DroppedBallsPosis;				// Positions of dropped balls
+declare Integer[Vec3] G_DroppedBallsTimes;		// Drop times of droppped balls
+declare Real[Integer] G_MarkerYs;				// Y coordinate of marker strings
+declare CUILayer G_LayerTeamInformation;		// Layer for team information
+declare Integer G_LastContinuesCallbacks;		// Last time continues callbacks have been sent
+// Variable caches
+declare Boolean Cache_S_FriendlyFire;			// Cache for S_FriendlyFire
+declare Boolean Cache_S_LaserBattle;			// Cache for S_LaserBattle
+declare Text Cache_XmlRpc_ExtraRules;			// Cache for ExtraRules from server controllers
+
+/*****************************************************
+	EXTENSIONS
+*****************************************************/
+
+***StartServer***
+***
+log("GoldenDunk.Script.txt loaded!");
+log("Version: "^Version);
+
+Color::Load();
+
+// Teams
+UseClans = True;
+
+// Clublinks
+MB_UsePlayerClublinks = C_UsePlayerClublinks;
+MB_NeutralEmblemUrl = C_NeutralEmblemUrl;
+
+// Tops
+if (C_UseTops) {
+	Top::AddTop(T_Damage, C_TopCount);
+	Top::AddTop(T_Scores, C_TopCount);
+	Top::AddTop(T_Engineer, C_TopCount);
+	Top::AddTop(T_Backstabber, C_TopCount);
+}
+
+// Init variables
+MB_UseSectionRound = True;
+G_LastUIUpdate = 0;
+G_LastBigMessage = 0;
+G_LastStatusMessage = 0;
+G_LastContinuesCallbacks = 0;
+
+UIManager.UIAll.NoticesFilter_HideMapWarning = True;
+// Name plates
+SM::SetupDefaultVisibility();
+
+Mode::Ladder_OpenMatch_All();
+
+// Achievements
+if (C_UseAchievements) {
+	Achievements::InitSettings([
+	//	"HitRocket",
+	//	"HitRail",
+	//	"HitNucleus",
+	//	"PrecisionRocket",
+	//	"PrecisionRail",
+	//	"PrecisionNucleus",
+		"LongestRail",
+		"LongestRocket",
+		"LongestAirShot",
+		"AirStrike",
+	//	"HitUntouched",
+	//	"ComboHit",
+	//	"LongestTime",
+	//	"LessHited",
+	//	"DistanceTravel",
+	//	"TimeNearEnnemies",
+	//	"AirTime",
+	//	"ArmorReload",
+		"HitAfterHited"
+	]);
+}
+
+// Position layer
+declare LayerPosition <=> UIManager.UILayerCreate();
+Interface::SetLayerPosition(LayerPosition);
+// Teams layer
+declare LayerTeams <=> UIManager.UILayerCreate();
+declare SimpleLayerTeams <=> UIManager.UILayerCreate();
+if (C_UseSimpleTeamsLayer) {
+	SimpleLayerTeams.ManialinkPage = GetSimpleTeamsLayer();
+	UIManager.UIAll.UILayers.add(SimpleLayerTeams);
+} else {
+	Interface::SetLayerTeams(LayerTeams);
+	UIManager.UIAll.UILayers.add(LayerTeams);
+}
+// Top rankings layer
+declare LayerTops <=> UIManager.UILayerCreate();
+UIManager.UIAll.UILayers.add(LayerTops);
+// Team information layer
+G_LayerTeamInformation <=> UIManager.UILayerCreate();
+UpdateTeamInformationManialink(True);
+UIManager.UIAll.UILayers.add(G_LayerTeamInformation);
+***
+
+***StartMap***
+***
+ParsePositionsString();
+
+// UI
+UpdateRules();
+UIManager.UIAll.BigMessage = "";
+UIManager.UIAll.StatusMessage = "";
+UIManager.UIAll.Hud3dMarkers = "";
+UIManager.UIAll.ManialinkPage = "";
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+
+UIManager.UIAll.SendNotice(
+	_("New Match"), CUIConfig::ENoticeLevel::MatchInfo, 
+	Null, CUIConfig::EAvatarVariant::Default, 
+	CUIConfig::EUISound::StartMatch, 0);
+
+UpdateTeamInformationManialink(True);
+LayerPosition.IsVisible = True;
+LayerTops.IsVisible = True;
+LayerTeams.IsVisible = True;
+SimpleLayerTeams.IsVisible = True;
+G_LayerTeamInformation.IsVisible = True;
+
+// Auto team balance
+XmlRpc.SendCallback("TeamBalance", "");
+if (S_AutoTeamBalance) {
+	Mode::AutoTeamBalance();
+	SM::UnspawnAllPlayers();
+}
+
+// Prepare match
+Score::MatchBegin();
+Top::MatchBegin();
+Top::RoundBegin();
+Victory::MatchBegin();
+BalancedWeapons::MatchBegin();
+
+G_ClanPoints[1] = 0;
+G_ClanPoints[2] = 0;
+ClanScores[1] = 0;
+ClanScores[2] = 0;
+G_BallsCount = 2;
+
+// Prepare map
+G_ClanSpawnIDs.clear();
+G_BallsPolesIDs.clear();
+G_BallsPerPole.clear();
+G_MarkerYs.clear();
+G_CommandPostIDs.clear();
+G_CommandPostMarkers.clear();
+foreach (Base in Bases) {
+	Base.IsActive = True;
+	Base.Clan = 0;
+}
+foreach (Index => Spawn in BlockSpawns) {
+	G_ClanSpawnIDs[Spawn.Order] = Spawn.Id;
+}
+foreach (Index => Pole in BlockPoles) {
+	switch (Pole.Order) {
+		case 0: {
+			// Ball spawn
+			G_BallsPolesIDs.add(Pole.Id);
+			G_BallsPerPole[Pole.Id] = 0;
+			Pole.Gauge.ValueReal = 1.0;
+			continue;
+		}
+	}
+	switch (Pole.Tag) {
+		case "Command Post": {
+			if (Pole.Order == 1 || Pole.Order == 2) {
+				G_CommandPostIDs[Pole.Order] = Pole.Id;
+				Pole.Gauge.Max = C_CommandPostCaptureTime * 10;
+			}
+		}
+	}
+}
+XmlRpc.SendCallback("commandPosts", ""^(G_CommandPostIDs.count>0));
+
+// Cache settings
+Cache_S_FriendlyFire = S_FriendlyFire;
+Cache_S_LaserBattle = S_LaserBattle;
+UpdateRules();
+***
+
+***StartRound***
+***
+Score::RoundBegin();
+Victory::RoundBegin();
+BalancedWeapons::RoundBegin();
+
+if (C_UsePlayerClublinks) {
+	Clublink::DefineTeamAuto();
+}
+
+// UI
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+UIManager.UIAll.SendNotice(
+	"", CUIConfig::ENoticeLevel::MatchInfo, 
+	Null, CUIConfig::EAvatarVariant::Default, 
+	CUIConfig::EUISound::StartRound, 0);
+
+// Initialize values
+G_ClanPoints[1] = 0;
+G_ClanPoints[2] = 0;
+G_BallCarryingPlayerIDs.clear();
+G_DroppedBallsPosis.clear();
+G_DroppedBallsTimes.clear();
+G_ActiveCommandPostIDs.clear();
+AssignSpawnPoleClans();
+// Engineering
+foreach (Player in Players) {
+	declare Integer Engineered for Player;
+	Engineered = 0;
+	declare Integer LastUpdateEngineered for Player;
+	LastUpdateEngineered = 0;
+}
+foreach (Spectator in Players) {
+	declare Integer Engineered for Spectator;
+	Engineered = 0;
+	declare Integer LastUpdateEngineered for Spectator;
+	LastUpdateEngineered = 0;
+}
+
+// Set round times
+StartTime = Now + C_RespawnTime + 1000;
+EndTime = StartTime + S_TimeLimit * 1000;
+
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+***
+
+***OnNewPlayer***
+***
+// Prepare UI for the new player
+declare UI <=> UIManager.GetUI(Player);
+if (UI != Null) {
+	UI.UILayers.clear();
+	if (LayerPosition != Null) {
+		UI.UILayers.add(LayerPosition);
+	}
+}
+***
+
+***OnNewSpectator***
+***
+// Prepare UI for the new spectator
+declare UI <=> UIManager.GetUI(Spectator);
+if (UI != Null) {
+	UI.UILayers.clear();
+	
+	// Clear crosshair extension
+	UI.ManialinkPage = "";
+}
+***
+
+***PlayLoop***
+***
+// Library updates
+if (C_UseAchievements) {
+	Achievements::OnLoop();
+}
+
+// Update ball carriers
+foreach (PlayerId in G_BallCarryingPlayerIDs) {
+	if (!Players.existskey(PlayerId)) {
+		DropBall(PlayerId, True);
+	}
+}
+
+// Check for changed settings
+declare UpdateRules = False;
+if (Cache_S_FriendlyFire != S_FriendlyFire) {
+	// FriendlyFire changed
+	if (S_FriendlyFire) {
+		UIManager.UIAll.SendChat("$<$f80Friendly Fire$> is now $<$0f0activated$>! (Pay attention to not damage your team mates!)");
+	} else {
+		UIManager.UIAll.SendChat("$<$f80Friendly Fire$> is now $<$f11deactivated$>!");
+	}
+	Cache_S_FriendlyFire = S_FriendlyFire;
+	UpdateRules = True;
+}
+if (Cache_S_LaserBattle != S_LaserBattle) {
+	// InstaGib changed
+	if (S_LaserBattle) {
+		UIManager.UIAll.SendChat("$<$f80LaserBattle$> is now $<$0f0activated$>! (Players spawn with lasers.)");
+	} else {
+		UIManager.UIAll.SendChat("$<$f80LaserBattle$> is now $<$f11deactivated$>!");
+	}
+	Cache_S_LaserBattle = S_LaserBattle;
+	UpdateRules = True;
+}
+declare ExtraRules for XmlRpc = "";
+if (Cache_XmlRpc_ExtraRules != ExtraRules) {
+	Cache_XmlRpc_ExtraRules = ExtraRules;
+	UpdateRules = True;
+}
+if (UpdateRules) {
+	UpdateRules();
+}
+
+// Perform actions for each player
+foreach (Player in Players) {
+	// Highlighting
+	Player.IsHighlighted = !C_OnlyHighlightBallCarriers && Player.Armor > 0 || C_OnlyHighlightBallCarriers && G_BallCarryingPlayerIDs.exists(Player.Id);
+
+	// Actions
+	switch (Player.SpawnStatus) {
+		case CSmPlayer::ESpawnStatus::NotSpawned: {
+			// Player not spawned -> Spawn him!
+			if (!Player.RequestsSpectate) {
+				MySpawnPlayer(Player);
+			}
+		}
+		case CSmPlayer::ESpawnStatus::Spawning: {
+			// Kill cam
+			declare KillCamSpecTarget for Player = NullId;
+			if (KillCamSpecTarget != NullId) {
+				declare UI <=> UIManager.GetUI(Player);
+				if (UI != Null) {
+					if (C_UseKillCam && !UI.ForceSpectator && Now>Player.StartTime-C_RespawnTime+50) {
+						// Set force spec for the waiting time
+						UI.ForceSpectator = True;
+						UI.SpectatorForcedTarget = KillCamSpecTarget;
+					} else {
+						if (UI.ForceSpectator && Now > Player.StartTime-1200) {
+							// Reset force spec before player starts
+							UI.ForceSpectator = False;
+							UI.SpectatorForcedTarget = NullId;
+							KillCamSpecTarget = NullId;
+						}
+					}
+				}
+			}
+		}
+		case CSmPlayer::ESpawnStatus::Spawned: {
+			// Check for respawn requests
+			if (Player.CurrentClan != Player.RequestedClan || Player.RequestsSpectate) {
+				DropBall(Player.Id, False);
+				UnspawnPlayer(Player);
+			} else {
+				if (G_BallCarryingPlayerIDs.exists(Player.Id)) {
+					// Ball carrier!
+				} else {
+					// Check if the player picks up a ball
+					if (Player.Armor > 0) {
+						// At ball spawn
+						foreach (PoleId in G_BallsPolesIDs) {
+							if (G_BallsPerPole[PoleId] > 0) {
+								if (MathLib::Distance(Player.Position, BlockPoles[PoleId].Position) <= C_BallPickUpDistance) {
+									declare PickUp = PickUpBall(Player.Id);
+									if (PickUp) {
+										// Player picks up the ball
+										G_BallsPerPole[PoleId] -= 1;
+									}
+								}
+							}
+						}
+						if (!G_BallCarryingPlayerIDs.exists(Player.Id)) {
+							// At dropped balls
+							foreach (BallPosi in G_DroppedBallsPosis) {
+								if (MathLib::Distance(Player.Position, BallPosi) <= C_BallPickUpDistance) {
+									// Player picks up the ball
+									if (PickUpBall(Player.Id)) {
+										declare Temp = G_DroppedBallsPosis.remove(BallPosi);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// Handle pending events
+foreach (Event in PendingEvents) {
+	if (C_UseAchievements) {
+		Achievements::OnEvent(Event);
+	}
+	switch (Event.Type) {
+		case CSmModeEvent::EType::OnArmorEmpty: {
+			// Check for scoring
+			if (CheckScoring(Event.Victim.Id)) {
+				// Player scores for his team
+				declare DunkingPointsTeam = 2;
+				declare DunkingPointsPlayer = C_PointsForScoring;
+				// Check for golden goal
+				if (Now > EndTime) {
+					DunkingPointsPlayer += 1;
+				}
+				G_ClanPoints[Event.Victim.CurrentClan] += DunkingPointsTeam;
+				Score::AddPoints(Event.Victim, DunkingPointsPlayer);
+				Top::IncrementPlayerPoints(T_Scores, Event.Victim, DunkingPointsTeam);
+				UIManager.UIAll.SendNotice(
+					"""$<{{{Event.Victim.Name}}}$> scores for $<{{{Teams[Event.Victim.CurrentClan-1].ColorizedName}}}$>""", CUIConfig::ENoticeLevel::PlayerWarning,
+					Null, CUIConfig::EAvatarVariant::Default,
+					CUIConfig::EUISound::Capture, 0);
+				UpdateClanScoresSummary();
+				UpdateMarkerYs(Event.Victim.CurrentClan, Event.Victim.Position.Y);
+				
+				if (!Event.Victim.IsFakePlayer) {
+					XmlRpc.SendCallback("playerScore", Event.Victim.Login);
+					// Check for golden goal
+					if (Now > EndTime) {
+						XmlRpc.SendCallback("goldenGoal", Event.Victim.Login);
+					}
+				}
+				
+				DropBall(Event.Victim.Id, True);
+				// Check for command post
+				if (!G_CommandPostIDs.existskey(Event.Victim.CurrentClan) || !G_ActiveCommandPostIDs.exists(BlockPoles[G_CommandPostIDs[Event.Victim.CurrentClan]].Id)) {
+					// Respawn player
+					UnspawnPlayer(Event.Victim);
+				}
+				Discard(Event);
+			} else {
+				if (Event.Victim.IsInOffZone && Event.Shooter == Null) {
+					// Player in non-hoop offzone or without a ball
+					if (G_CommandPostIDs.existskey(Event.Victim.CurrentClan) && G_ActiveCommandPostIDs.exists(BlockPoles[G_CommandPostIDs[Event.Victim.CurrentClan]].Id)) {
+						// It's fine!
+						Discard(Event);
+					} else {
+						// Kill this noob!
+						DropBall(Event.Victim.Id, False);
+						if (!Event.Victim.IsFakePlayer) {
+							XmlRpc.SendCallback("playerDeath", Event.Victim.Login);
+						}
+						PassOn(Event);
+					}
+				} else {
+					if (Event.Shooter != Null) {
+						if (C_UseKillCam) {
+							declare KillCamSpecTarget for Event.Victim = NullId;
+							KillCamSpecTarget = Event.Shooter.Id;
+						}
+						BalancedWeapons::OnOut(Event.Shooter, Event.Victim);
+					}
+					if (Event.Victim != Null && !Event.Victim.IsFakePlayer && (Event.Shooter == Null || !Event.Shooter.IsFakePlayer)) {
+						XmlRpc::OnArmorEmpty(Event);
+					}
+					DropBall(Event.Victim.Id, False);
+					PassOn(Event);
+				}
+			}
+		}
+		case CSmModeEvent::EType::OnHit: {
+			if (Event.Shooter == Null || Event.Victim == Null) {
+				// Discard buggy event
+				Discard(Event);
+			} else {
+				// Reduce laser damage
+				Event.Damage = 100;
+				
+				// Handle hit
+				if (Event.Shooter == Event.Victim) {
+					// Discard self hit
+					Discard(Event);
+				} else {
+					if (Event.Shooter.CurrentClan == Event.Victim.CurrentClan) {
+						if (S_FriendlyFire) {
+							// Friendly fire hits
+							declare Points = -1;
+							Event.ShooterPoints = Points;
+							// Decrease scores
+							if (!Event.Shooter.IsFakePlayer) {
+								Top::IncrementPlayerPoints(T_Backstabber, Event.Shooter, -Points);
+							}
+							Score::AddPoints(Event.Shooter, Points);
+							// Kill victim if he hasn't full armor
+							if (Event.Victim.Armor < 200) {
+								Event.Damage = Event.Victim.Armor;
+							}
+							// Show team hit warning
+							if (Event.Shooter.IsFakePlayer && C_NbTeamHitMessage != 0) {
+								declare UI <=> UIManager.GetUI(Event.Shooter);
+								if (UI != Null) {
+									declare NbTeamHitMessage for UI = 0;
+									if (C_NbTeamHitMessage < 0 || NbTeamHitMessage < C_NbTeamHitMessage) {
+										UI.StatusMessage = T_TeamHitMessage;
+										NbTeamHitMessage += 1;
+										declare LastStatusMessage for UI = 0;
+										LastStatusMessage = Now;
+									}
+								}
+							}
+							PassOn(Event);
+						} else {
+							// Discard team hits
+							Discard(Event);
+						}
+					} else {
+						// Enemy hit - Calculate points for the hit
+						declare Points = 1;
+						if (!Event.Shooter.IsFakePlayer) {
+							declare Type = "Attack";
+							// Check for defend hits
+							if (G_BallCarryingPlayerIDs.exists(Event.Victim.Id)) {
+								// Defending hit
+								Type = "Defend";
+								
+								// Check distance to hoop for granting more points
+								declare VictimPosi = Event.Victim.Position;
+								if (MathLib::Abs(G_HoopCenterXPositions[Event.Victim.CurrentClan] - VictimPosi.X) <= 20.0 && MathLib::Abs(G_HoopCenterZPositions[Event.Victim.CurrentClan] - VictimPosi.Z) <= 20.0) {
+									Points *= 2;
+								}
+							}
+							if (!Event.Victim.IsFakePlayer) {
+								XmlRpc::OnHit(Event);
+							}
+						}
+						Event.ShooterPoints = Points;
+						Score::AddPoints(Event.Shooter, Points);
+						if (!Event.Shooter.IsFakePlayer) {
+							Top::IncrementPlayerPoints(T_Damage, Event.Shooter, Points);
+						}
+						// Kill victim if he hasn't full armor
+						if (Event.Victim.Armor < 200) {
+							Event.Damage = Event.Victim.Armor;
+						}
+						PassOn(Event);
+					}
+				}
+			}
+		}
+		case CSmModeEvent::EType::OnPlayerRequestRespawn: {
+			// Drop a ball
+			DropBall(Event.Player.Id, False);
+			MySpawnPlayer(Event.Player);
+			if (!Event.Player.IsFakePlayer) {
+				XmlRpc::OnPlayerRequestRespawn(Event);
+			}
+			Discard(Event);
+		}
+		case CSmModeEvent::EType::OnNearMiss: {
+			// Near miss
+			if (!Event.Shooter.IsFakePlayer) {
+				if (C_NearMissDist >= 0 && Event.MissDist <= C_NearMissDist) {
+					declare UI <=> UIManager.GetUI(Event.Shooter);
+					if (UI != Null) {
+						UI.StatusMessage = GetNearMissMessage(Event);
+						declare LastStatusMessage for UI = 0;
+						LastStatusMessage = Now;
+					}
+				}
+				XmlRpc::OnPlayerRequestRespawn(Event);
+			}
+			PassOn(Event);
+		}
+		default: {
+			PassOn(Event);
+		}
+	}
+}
+
+// Reset dropped balls
+foreach (BallPosi => BallDropTime in G_DroppedBallsTimes) {
+	if (BallDropTime + C_BallResetTime < Now) {
+		declare Temp = G_DroppedBallsPosis.remove(BallPosi);
+		Temp = G_DroppedBallsTimes.removekey(BallPosi);
+	}
+}
+UpdateBallSpawns();
+
+// Check for command post captures
+foreach (Clan => PoleId in G_CommandPostIDs) {
+	declare Speed = 0;
+	foreach (PlayerId in BlockPoles[PoleId].Sector.PlayersIds) {
+		declare CaptureSpeed for Players[PlayerId] = 10;
+		if (Players[PlayerId].CurrentClan == Clan) {
+			// Mate
+			Speed += CaptureSpeed;
+		} else {
+			// Opponent
+			Speed -= CaptureSpeed;
+		}
+		
+		declare UI <=> UIManager.GetUI(Players[PlayerId]);
+		if (UI != Null) {
+			UI.GaugeClan = BlockPoles[PoleId].Gauge.Clan;
+			UI.GaugeRatio = BlockPoles[PoleId].Gauge.ValueReal;
+			if (BlockPoles[PoleId].Gauge.Clan == Players[PlayerId].CurrentClan) {
+				// Constructing
+				if (G_ActiveCommandPostIDs.exists(BlockPoles[PoleId].Id)) {
+					// Command post already fully constructed
+					UI.GaugeMessage = _("Constructed!");
+				} else {
+					UI.GaugeMessage = _("Constructing...");
+				}
+			} else {
+				// Destroying
+				if (G_ActiveCommandPostIDs.exists(BlockPoles[PoleId].Id)) {
+					UI.GaugeMessage = _("Destroying...");
+				} else {
+					// Command post already completely destroyed
+					UI.GaugeMessage = _("Destroyed!");
+				}
+			}
+		}
+	}
+	if (Speed < 0 && BlockPoles[PoleId].Gauge.ValueReal <= 0.0 || Speed > 0 && BlockPoles[PoleId].Captured) {
+		Speed = 0;
+	}
+	BlockPoles[PoleId].Gauge.Speed = Speed;
+	
+	// Engineering
+	if (Speed != 0) {
+		foreach (PlayerId in BlockPoles[PoleId].Sector.PlayersIds) {
+			declare Engineered for Players[PlayerId] = 0;
+			Engineered += Period;
+			Top::SetPlayerPoints(T_Engineer, Players[PlayerId], MathLib::FloorInteger(Engineered*100.0/C_CommandPostCaptureTime));
+		}
+	}
+	
+	// Check if command post activation status changes
+	if (G_ActiveCommandPostIDs.exists(PoleId)) {
+		// Command post active
+		if (BlockPoles[PoleId].Gauge.ValueReal < C_CommPostActivationRatio) {
+			// Command post becomes deactivated
+			declare Temp = G_ActiveCommandPostIDs.remove(PoleId);
+			UIManager.UIAll.SendNotice(
+				"The "^T_CommandPost^" of $<"^Teams[BlockPoles[PoleId].Gauge.Clan-1].ColorizedName^"$> has been destroyed!",
+				CUIConfig::ENoticeLevel::MapInfo,
+				Null, CUIConfig::EAvatarVariant::Default,
+				CUIConfig::EUISound::Checkpoint, 1);
+		}
+	} else {
+		// Command post not active yet
+		if (BlockPoles[PoleId].Gauge.ValueReal > C_CommPostActivationRatio) {
+			// Command post becomes activated
+			G_ActiveCommandPostIDs.add(PoleId);
+			UIManager.UIAll.SendNotice(
+				"$<"^Teams[BlockPoles[PoleId].Gauge.Clan-1].ColorizedName^"$> has constructed their "^T_CommandPost^"!",
+				CUIConfig::ENoticeLevel::MapInfo,
+				Null, CUIConfig::EAvatarVariant::Default,
+				CUIConfig::EUISound::Checkpoint, 0);
+		}
+	}
+}
+
+// UI updates
+if (G_LastUIUpdate + C_UITickInterval < Now) {
+	G_LastUIUpdate = Now;
+	
+	// Team information
+	UpdateTeamInformationManialink();
+	
+	// Top rankings
+	if (C_UseTops) {
+		declare TopNb = 2;
+		if (G_CommandPostIDs.count > 0) {
+			TopNb += 1;
+		}
+		if (S_FriendlyFire) {
+			TopNb += 1;
+		}
+		declare Position = "129 -30";
+		switch (((Now - StartTime) / 7000) % TopNb) {
+			case 0: {
+				LayerTops.ManialinkPage = GetFrameTop(T_Damage, Position);
+			}
+			case 1: {
+				LayerTops.ManialinkPage = GetFrameTop(T_Scores, Position);
+			}
+			case 2: {
+				if (G_CommandPostIDs.count > 0) {
+					LayerTops.ManialinkPage = GetFrameTop(T_Engineer, Position);
+				} else {
+					LayerTops.ManialinkPage = GetFrameTop(T_Backstabber, Position);
+				}
+			}
+			case 3: {
+				LayerTops.ManialinkPage = GetFrameTop(T_Backstabber, Position);
+			}
+		}
+	}
+	
+	// Clear big messages
+	if (G_LastBigMessage > 0 && G_LastBigMessage + 5000 < Now) {
+		UIManager.UIAll.BigMessage = "";
+		G_LastBigMessage = 0;
+	}
+	
+	// Clear status messages
+	if (G_LastStatusMessage > 0 && G_LastStatusMessage + 5000 < Now) {
+		UIManager.UIAll.StatusMessage = "";
+		G_LastStatusMessage = 0;
+	}
+	
+	// Clan scores at the top
+	UpdateClanScoresSummary();
+	
+	// Build new simple teams layer update (to update team color)
+	if (C_UseSimpleTeamsLayer) {
+		SimpleLayerTeams.ManialinkPage = GetSimpleTeamsLayer();
+	}
+	
+	// Update players UI
+	foreach (Player in Players) {
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI != Null) {
+			// Update layers
+			UpdatePositionLayer(Player);
+			UpdateSimpleTeamsLayer(Player);
+			
+			// Update markers
+			declare Markers =	GetBallsHud3dMarkers()
+								^
+								G_ClanAttackMarkers[Player.CurrentClan]
+								^
+								G_ClanDefendMarkers[Player.CurrentClan];
+			if (G_CommandPostMarkers.existskey(1) && G_CommandPostMarkers.existskey(2)) {
+				Markers ^=	G_CommandPostMarkers[1]
+							^
+							G_CommandPostMarkers[2];
+			}
+			UI.Hud3dMarkers = Markers;
+			
+			// Gauge
+			if (Player.BlockPole == Null) {
+				UI.GaugeRatio = -1.0;
+				UI.GaugeMessage = "";
+			}
+			
+			// Update crosshair extension
+			if (G_BallCarryingPlayerIDs.exists(Player.Id)) {
+				UI.ManialinkPage = """<label posn="0 7" halign="center" scale="2" text="{{{Teams[Player.CurrentClan-1].ColorText}}}〝     〞" style="TextCardSmallScores1"/><label posn="0 -8" halign="center" scale="1" text="{{{Teams[Player.CurrentClan-1].ColorText}}}$n$oYou have a {{{T_Ball}}}" style="TextCardSmallScores2"/>""";
+			} else {
+				UI.ManialinkPage = "";
+			}
+			
+			// Clear player status message
+			declare LastStatusMessage for UI = 0;
+			if (UI.StatusMessage != "" && (LastStatusMessage > 0 && LastStatusMessage + 4500 < Now) || UI.StatusMessage == T_WaitForSpawn) {
+				UI.StatusMessage = "";
+				LastStatusMessage = 0;
+			}
+		}
+	}
+	
+	// Update spectators UI
+	foreach (Spectator in Spectators) {
+		declare UI <=> UIManager.GetUI(Spectator);
+		if (UI != Null) {
+			// Update layers
+			UpdateSimpleTeamsLayer(Spectator);
+			
+			// Update markers
+			declare Markers = GetBallsHud3dMarkers();
+			if (G_CommandPostMarkers.existskey(1) && G_CommandPostMarkers.existskey(2)) {
+				Markers ^=	G_CommandPostMarkers[1]
+							^
+							G_CommandPostMarkers[2];
+			}
+			UI.Hud3dMarkers = Markers;
+			
+			// Gauge
+			UI.GaugeRatio = -1.0;
+			UI.GaugeMessage = "";
+		}
+	}
+}
+
+// Continues callbacks
+if (G_LastContinuesCallbacks + 5000 < Now) {
+	G_LastContinuesCallbacks = Now;
+	SendEngineeringCallback();
+}
+
+// Round end conditions
+if (Now >= EndTime) {
+	if (G_ClanPoints[1] == G_ClanPoints[2] && Players.count > 0) {
+		// Even scores - Wait for the golden goal!
+		if (UIManager.UIAll.CountdownEndTime == -1) {
+			UIManager.UIAll.CountdownEndTime = Now;
+			EndTime = -1;
+			foreach (Player in Players) {
+				Player.EndTime = -1;
+			}
+		}
+		declare Message = """$0f0$w$s{{{T_GoldenGoal}}}!""";
+		if (UIManager.UIAll.StatusMessage != Message) {
+			UIManager.UIAll.StatusMessage = Message;
+			UIManager.UIAll.SendNotice(
+				"", CUIConfig::ENoticeLevel::MatchInfo,
+				Null, CUIConfig::EAvatarVariant::Default,
+				CUIConfig::EUISound::PhaseChange, 0);
+		}
+	} else {
+		MB_StopRound = True;
+		UIManager.UIAll.StatusMessage = "";
+		UIManager.UIAll.SendNotice(
+			"", CUIConfig::ENoticeLevel::MatchInfo,
+			Null, CUIConfig::EAvatarVariant::Default,
+			CUIConfig::EUISound::Warning, 0);
+	}
+}
+***
+
+***EndRound***
+***
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+
+StartTime = -1;
+EndTime = -1;
+UIManager.UIAll.CountdownEndTime = -1;
+SM::UnspawnAllPlayers();
+MB_Sleep(3000);
+
+// Evaluate round
+declare Message = _("Round Draw");
+for (Index, 1, 2) {
+	if (G_ClanPoints[Index] > G_ClanPoints[3-Index]) {
+		// Team 'Index' wins the round
+		ClanScores[Index] += 1;
+		Message = """{{{Teams[Index-1].ColorizedName}}} wins the round!""";
+		break;
+	}
+}
+UpdateClanScoresSummary();
+
+UIManager.UIAll.BigMessage = "";
+UIManager.UIAll.SendNotice(
+	Message, CUIConfig::ENoticeLevel::MatchInfo,
+	Null, CUIConfig::EAvatarVariant::Default,
+	CUIConfig::EUISound::EndRound, 0);
+
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+
+// Show all top lists
+if (C_UseTops) {
+	declare ManialinkPage =	GetFrameTop(T_Damage, "-65 80") ^
+							GetFrameTop(T_Scores, "-5 80");
+	if (G_CommandPostIDs.count > 0) {
+		ManialinkPage ^= GetFrameTop(T_Engineer, "55 80");
+	}
+	if (S_FriendlyFire) {
+		ManialinkPage ^= GetFrameTop(T_Backstabber, "-40 -30");
+	}
+	LayerTops.ManialinkPage = ManialinkPage;
+}
+
+// Check match end conditions
+Victory::SetMatchWinnerFromScore(S_RoundsToWin, S_RoundGapToWin, S_RoundsLimit);
+if (!Victory::NoMatchWinner()) {
+	// Match winner found
+	MB_StopMap = True;
+}
+
+// Engineering callback
+foreach (Player in Players) {
+	if (!Player.IsFakePlayer) {
+		declare Engineered for Player = 0;
+		if (Engineered > 0) {
+			XmlRpc.SendCallback("Engineered", ""^Engineered);
+		}
+	}
+}
+
+// Wait to let the players take a breath
+MB_Sleep(4000);
+
+Score::RoundEnd();
+Victory::RoundEnd();
+BalancedWeapons::RoundEnd();
+***
+
+***EndMap***
+***
+Score::MatchEnd();
+Top::RoundEnd();
+Top::MatchEnd();
+Victory::MatchEnd();
+BalancedWeapons::MatchEnd();
+
+// UI
+UIManager.UIAll.BigMessage = "";
+UIManager.UIAll.StatusMessage = "";
+UIManager.UIAll.Hud3dMarkers = "";
+UIManager.UIAll.ManialinkPage = "";
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
+
+// Hide useless layers
+if (C_HideStuffAtMapEnd) {
+	// Custom layers
+	LayerPosition.IsVisible = False;
+	LayerTops.IsVisible = False;
+	LayerTeams.IsVisible = False;
+	SimpleLayerTeams.IsVisible = False;
+	G_LayerTeamInformation.IsVisible = False;
+}
+
+// Announce victorious clan
+declare Message = _("Match Draw");
+if (!Victory::IsMatchDraw()) {
+	for (Index, 1, 2) {
+		if (Victory::IsMatchWinner(Index)) {
+			// Team 'Index' wins the match
+			Message = """{{{Teams[Index-1].ColorizedName}}} wins the match!""";
+			break;
+		}
+	}
+}
+UIManager.UIAll.SendNotice(
+	Message, CUIConfig::ENoticeLevel::MatchInfo, 
+	Null, CUIConfig::EAvatarVariant::Default, 
+	CUIConfig::EUISound::EndMatch, 0);
+
+MB_Sleep(4000);
+***
+
+***EndServer***
+***
+Mode::Ladder_CloseMatch();
+
+SpawnScreen::DestroyRules();
+Color::Unload();
+UIManager.UILayerDestroyAll();
+
+if (C_UseAchievements) {
+	Achievements::ResetTop("all");
+}
+***
+
+/*****************************************************
+	FUNCTIONS
+*****************************************************/
+
+// Updates the rules layer
+Void UpdateRules() {
+	declare ModeName = "GoldenDunk";
+	
+	declare AvailableBallsText = "";
+	if (G_BallsCount > 1) {
+		// Multiple balls
+		AvailableBallsText = """are $<$f80{{{G_BallsCount}}}$> $<$f0f{{{T_Balls}}}$>""";
+	} else {
+		// Single ball
+		AvailableBallsText = """is $<$f80{{{G_BallsCount}}}$> $<$f0f{{{T_Ball}}}$>""";
+	}
+	declare ModeRules = """
+- Two teams fight for $<$f0f{{{T_Balls}}}$> in order to score at the opponents hoop.
+- Grab a $<$f0f{{{T_Ball}}}$> and get it into the enemys hoop to score. (There {{{AvailableBallsText}}} available which can be picked up by any player on any team). You can still hit players while having a $<$f0f{{{T_Ball}}}$>!
+- When a ball carrier dies the $<$f0f{{{T_Ball}}}$> drops and it can be picked up within $<$f80{{{C_BallResetTime/1000.0}}}$> seconds.
+- One round lasts $<$f80{{{S_TimeLimit}}}$> seconds and the team with the most points at the end of the round wins it. If both teams have even scores a $<$0f0{{{T_GoldenGoal}}}$> will decide the round.
+""";
+	if (G_CommandPostIDs.count > 0) {
+		ModeRules ^= """- Capture your teams $<$0f0{{{T_CommandPost}}}$> to be able to walk through offzone. (The effect activates at $<$f80{{{C_CommPostActivationRatio}}}%$>.)
+""";
+	}
+	ModeRules ^= "\n";
+	
+	// Mode settings hints
+	if (S_FriendlyFire) {
+		ModeRules ^= """- $<$f80Friendly Fire$> is activated! (Pay attention to not damage your team mates!)
+""";
+	}
+	if (S_LaserBattle) {
+		ModeRules ^= """- $<$f80LaserBattle$> is activated! (Players spawn with lasers.)
+""";
+	}
+	
+	// XmlRpc extra rules
+	declare ExtraRules for XmlRpc = "";
+	if (ExtraRules != "") {
+		if (S_FriendlyFire || S_LaserBattle) {
+			ModeRules ^= "\n";
+		}
+		ModeRules ^= "$<"^ExtraRules^"$>";
+	}
+	
+	// Create and attach new rules
+	SpawnScreen::CreateRules(ModeName, ModeRules, False);
+}
+
+// Set ball count of ball spawns
+Void UpdateBallSpawns() {
+	// Update number of available balls
+	declare OldCount = G_BallsCount;
+	declare PlayerCount = 0;
+	foreach (Player in Players) {
+		if (!Player.IsFakePlayer) {
+			PlayerCount += 1;
+		}
+	}
+	if (S_ForceBallCount > 0) {
+		// Forced ball count
+		G_BallsCount = S_ForceBallCount;
+	} else {
+		// Dynamic ball count
+		if (PlayerCount < 6) {
+			G_BallsCount = 2;
+		} else {
+			if (PlayerCount < 10) {
+				G_BallsCount = 3;
+			} else {
+				if (PlayerCount < 14) {
+					G_BallsCount = 4;
+				} else {
+					if (PlayerCount < 20) {
+						G_BallsCount = 5;
+					} else {
+						G_BallsCount = 6;
+					}
+				}
+			}
+		}
+	}
+	if (OldCount != G_BallsCount) {
+		UpdateRules();
+	}
+	
+	// Set balls to poles
+	declare FreeBalls = G_BallsCount - G_DroppedBallsPosis.count - G_BallCarryingPlayerIDs.count;
+	foreach (PoleId in G_BallsPolesIDs) {
+		FreeBalls -= G_BallsPerPole[PoleId];
+	}
+	declare BallsCount = 0;
+	while (FreeBalls > 0) {
+		foreach (PoleId in G_BallsPolesIDs) {
+			if (G_BallsPerPole[PoleId] == BallsCount) {
+				G_BallsPerPole[PoleId] += 1;
+				FreeBalls -= 1;
+			}
+		}
+		BallsCount += 1;
+	}
+}
+
+// Parse positions string to array
+Void ParsePositionsString() {
+	declare String = Map.ObjectiveTextAuthor;
+	declare Begin = 0;
+	declare Order = -1;
+	declare XPosi = "-0.0";
+	declare ZPosi = "-0.0";
+	
+	for (Index, 0, TextLib::Length(String)) {
+		declare Char = TextLib::SubString(String, Index, 1);
+		switch (Char) {
+			case ":": {
+				Order = TextLib::ToInteger(TextLib::SubString(String, Begin, Index-Begin));
+				Begin = Index+1;
+			}
+			case ",": {
+				XPosi = TextLib::SubString(String, Begin, Index-Begin);
+				Begin = Index+1;
+			}
+			case ";": {
+				ZPosi = TextLib::SubString(String, Begin, Index-Begin);
+				Begin = Index+1;
+				
+				G_HoopCenterXPositions[Order] = TextLib::ToReal(XPosi) * (376.0/47.0) + 4.0;
+				G_HoopCenterZPositions[Order] = TextLib::ToReal(ZPosi) * (376.0/47.0) + 4.0;
+			}
+		}
+	}
+}
+
+// Spawn player
+Void MySpawnPlayer(CSmPlayer _Player) {
+	UnspawnPlayer(_Player);
+	
+	// Set player weapon
+	BalancedWeapons::SetPlayerWeapon(_Player, True);
+	if (S_LaserBattle) {
+		This.SetPlayerWeapon(_Player, CSmMode::EWeapon::Laser, False);
+		_Player.AmmoGain += C_InstaGibExtraAmmoGain;
+	} else {
+		This.SetPlayerWeapon(_Player, CSmMode::EWeapon::Rocket, True);
+		_Player.AmmoGain += C_NormalExtraAmmoGain;
+	}
+	
+	SM::SpawnPlayer(_Player, _Player.RequestedClan, BlockSpawns[G_ClanSpawnIDs[_Player.RequestedClan]], Now + C_RespawnTime);
+}
+
+// Updates attack/defend marker strings
+Void UpdateMarkerStrings() {
+	for (Index, 1, 2) {
+		declare Y = 40.0;
+		if (G_MarkerYs.existskey(Index)) {
+			Y = G_MarkerYs[Index];
+		}
+		declare HoopPosi = <G_HoopCenterXPositions[Index], Y, G_HoopCenterZPositions[Index]>;
+		G_ClanDefendMarkers[3-Index] = """<marker label="{{{Teams[Index-1].ColorText^_("Defend")}}}" pos="{{{HoopPosi[0]}}} {{{HoopPosi[1]}}} {{{HoopPosi[2]}}}"/>""";
+		G_ClanAttackMarkers[Index] = """<marker label="{{{Teams[Index-1].ColorText^_("Target")}}}" pos="{{{HoopPosi[0]}}} {{{HoopPosi[1]}}} {{{HoopPosi[2]}}}"/>""";
+	}
+	
+	foreach (Order => PoleId in G_CommandPostIDs) {
+		declare PolePosi = BlockPoles[PoleId].Position;
+		G_CommandPostMarkers[Order] = """<marker label="{{{Teams[Order-1].ColorText^T_CommandPost}}}" pos="{{{PolePosi[0]}}} {{{PolePosi[1]}}} {{{PolePosi[2]}}}"/>""";
+	}
+}
+
+// Updates marker Ys
+Void UpdateMarkerYs(Integer _Index, Real _Y) {
+	if (!G_MarkerYs.existskey(_Index)) {
+		// Y not set yet
+		G_MarkerYs[_Index] = _Y + 5.0;
+		UpdateMarkerStrings();
+	} else {
+		// Y already set, check for update
+		if (G_MarkerYs[_Index] + 5.0 < _Y) {
+			G_MarkerYs[_Index] = _Y + 5.0;
+			UpdateMarkerStrings();
+		}
+	}
+}
+
+// Set clans of spawns and poles at start of map and each round (changing sides)
+Void AssignSpawnPoleClans() {
+	// SPAWNS
+	// Change sides
+	declare FirstSpawns = G_ClanSpawnIDs[1];
+	G_ClanSpawnIDs[1] = G_ClanSpawnIDs[2];
+	G_ClanSpawnIDs[2] = FirstSpawns;
+	// Assign clans
+	foreach (Clan => SpawnId in G_ClanSpawnIDs) {
+		switch (BlockSpawns[SpawnId].Base.Clan) {
+			case 0: {
+				BlockSpawns[SpawnId].Base.Clan = Clan;
+			}
+			default: {
+				BlockSpawns[SpawnId].Base.Clan = 3-BlockSpawns[SpawnId].Base.Clan;
+			}
+		}
+	}
+	
+	// HOOPS
+	// Change sides
+	declare OldX = G_HoopCenterXPositions[1];
+	declare OldZ = G_HoopCenterZPositions[1];
+	G_HoopCenterXPositions[1] = G_HoopCenterXPositions[2];
+	G_HoopCenterZPositions[1] = G_HoopCenterZPositions[2];
+	G_HoopCenterXPositions[2] = OldX;
+	G_HoopCenterZPositions[2] = OldZ;
+	if (G_MarkerYs.existskey(1) && G_MarkerYs.existskey(2)) {
+		declare OldY = G_MarkerYs[1];
+		G_MarkerYs[1] = G_MarkerYs[2];
+		G_MarkerYs[2] = OldY;
+	}
+	
+	// COMMAND POSTS
+	if (G_CommandPostIDs.existskey(1) && G_CommandPostIDs.existskey(2)) {
+		// Change sides
+		declare OldId = G_CommandPostIDs[1];
+		G_CommandPostIDs[1] = G_CommandPostIDs[2];
+		G_CommandPostIDs[2] = OldId;
+		// Assign clans
+		foreach (Clan => PoleId in G_CommandPostIDs) {
+			// Bases
+			switch (BlockPoles[PoleId].Base.Clan) {
+				case 0: {
+					BlockPoles[PoleId].Base.Clan = Clan;
+				}
+				default: {
+					BlockPoles[PoleId].Base.Clan = 3-BlockPoles[PoleId].Base.Clan;
+				}
+			}
+			// Gauges
+			switch (BlockPoles[PoleId].Gauge.Clan) {
+				case 0: {
+					BlockPoles[PoleId].Gauge.Clan = Clan;
+				}
+				default: {
+					BlockPoles[PoleId].Gauge.Clan = 3-BlockPoles[PoleId].Gauge.Clan;
+				}
+			}
+			// Initialize values
+			BlockPoles[PoleId].Gauge.Speed = 0;
+			BlockPoles[PoleId].Gauge.ValueReal = 0.0;
+			BlockPoles[PoleId].Captured = False;
+		}
+	}
+	
+	// Prepare markers
+	UpdateMarkerStrings();
+}
+
+// Player picks up a ball
+Boolean PickUpBall(Ident _PlayerId) {
+	// Perform several checks if picking up is allowed right now because of weird bugs of the game itself
+	if (Players.existskey(_PlayerId) && !G_BallCarryingPlayerIDs.exists(_PlayerId) && G_BallCarryingPlayerIDs.count < G_BallsCount && Now >= StartTime && Players[_PlayerId].Armor > 0) {
+		G_BallCarryingPlayerIDs.add(_PlayerId);
+		Score::AddPoints(Players[_PlayerId], 1);
+		declare UI <=> UIManager.GetUI(Players[_PlayerId]);
+		if (UI != Null) {
+			UI.SendNotice(
+				"", CUIConfig::ENoticeLevel::PlayerInfo, 
+				Null, CUIConfig::EAvatarVariant::Default, 
+				CUIConfig::EUISound::FirstHit, 0);
+		}
+		return True;
+	}
+	return False;
+}
+
+// Check if a player is able to score
+Boolean CheckScoring(Ident _PlayerId) {
+	// Check ball carrying and offzone
+	if (Players.existskey(_PlayerId) && G_BallCarryingPlayerIDs.exists(_PlayerId) && Players[_PlayerId].IsInOffZone) {
+		// Check distance to hoop
+		declare PlayerPosi = Players[_PlayerId].Position;
+		if (MathLib::Abs(G_HoopCenterXPositions[Players[_PlayerId].CurrentClan] - PlayerPosi[0]) <= 4.0 && MathLib::Abs(G_HoopCenterZPositions[Players[_PlayerId].CurrentClan] - PlayerPosi[2]) <= 4.0) {
+			return True;
+		}
+	}
+	
+	return False;
+}
+
+// Ball carrier drops a ball
+Void DropBall(Ident _PlayerId, Boolean _Reset) {
+	if (G_BallCarryingPlayerIDs.exists(_PlayerId)) {
+		// Remove ball carrier
+		declare Temp = G_BallCarryingPlayerIDs.remove(_PlayerId);
+		
+		// Save position of dropped ball
+		if (!_Reset && Players.existskey(_PlayerId)) {
+			G_DroppedBallsPosis.add(Players[_PlayerId].Position);
+			G_DroppedBallsTimes[Players[_PlayerId].Position] = Now;
+		}
+	}
+}
+
+// Updates clan scores at the top
+Void UpdateClanScoresSummary() {
+	declare PlayerClan1Id = NullId;
+	declare PlayerClan2Id = NullId;
+	foreach (Player in Players) {
+		if (PlayerClan1Id == NullId && Player.CurrentClan == 1) {
+			PlayerClan1Id = Player.Id;
+		} else {
+			if (PlayerClan2Id == NullId && Player.CurrentClan == 2) {
+				PlayerClan2Id = Player.Id;
+			} else {
+				if (PlayerClan1Id != NullId && PlayerClan2Id != NullId) {
+					break;
+				}
+			}
+		}
+	}
+	if (PlayerClan1Id != NullId && PlayerClan2Id != NullId) {
+		UIManager.UIAll.OverlayScoreSummary = True;
+		UIManager.UIAll.ScoreSummary_Player1 = PlayerClan1Id;
+		UIManager.UIAll.ScoreSummary_Points1 = G_ClanPoints[Players[PlayerClan1Id].CurrentClan];
+		UIManager.UIAll.ScoreSummary_MatchPoints1 = ClanScores[Players[PlayerClan1Id].CurrentClan];
+		UIManager.UIAll.ScoreSummary_Player2 = PlayerClan2Id;
+		UIManager.UIAll.ScoreSummary_Points2 = G_ClanPoints[Players[PlayerClan2Id].CurrentClan];
+		UIManager.UIAll.ScoreSummary_MatchPoints2 = ClanScores[Players[PlayerClan2Id].CurrentClan];
+	} else {
+		UIManager.UIAll.OverlayScoreSummary = False;
+	}
+}
+
+// Get top frame depending on style setting
+Text GetFrameTop(Text _TopIdent, Text _Pos) {
+	declare Title = """Top {{{C_TopCount}}} {{{_TopIdent}}}""";
+	declare UnitType = "";
+	switch (_TopIdent) {
+		case T_Engineer: {
+			UnitType = "Percent";
+		}
+		case T_Backstabber: {
+			Title = """Flop {{{C_TopCount}}} {{{_TopIdent}}}""";
+		}
+	}
+	return Top::GetFrameTop2(_TopIdent, Title, _Pos, UnitType);
+}
+
+// Create simple teams layer manialink
+Text GetSimpleTeamsLayer() {
+	return """
+		<script><!--
+			main() {
+				declare Label_Blue <=> (Page.GetFirstChild("BlueLabel") as CMlLabel);
+				declare Label_Red <=> (Page.GetFirstChild("RedLabel") as CMlLabel);
+				declare netread Net_NbPlayersBlue for UI = 0;
+				declare netread Net_ColorBlue for UI = "";
+				declare netread Net_NbPlayersRed for UI = 0;
+				declare netread Net_ColorRed for UI = "";
+				
+				while (True) {
+					yield;
+					
+					// Update display of player counts
+					// Blue
+					declare LabelText = Net_NbPlayersBlue^" Player";
+					if (Net_NbPlayersBlue > 1) {
+						LabelText ^= "s";
+					}
+					Label_Blue.SetText(LabelText);
+					
+					// Red
+					LabelText = Net_NbPlayersRed^" Player";
+					if (Net_NbPlayersRed > 1) {
+						LabelText ^= "s";
+					}
+					Label_Red.SetText(LabelText);
+				}
+			}
+		--></script>
+		<frame>
+			// Blue team
+			<quad posn="-32 90.2 0" sizen="15 3" halign="center" valign="top" bgcolor="{{{Color::RgbToHex(Teams[0].ColorPrimary)}}}7"/>
+			<label posn="-32 90.0 1" scale="0.6" halign="center" valign="top" id="BlueLabel"/>
+			
+			// Red team
+			<quad posn="32.5 90.2 0" sizen="15 3" halign="center" valign="top" bgcolor="{{{Color::RgbToHex(Teams[1].ColorPrimary)}}}7"/>
+			<label posn="32.5 90.0 1" scale="0.6" halign="center" valign="top" id="RedLabel"/>
+		</frame>""";
+}
+
+// Update simple teams layer
+Void UpdateSimpleTeamsLayer(CSmPlayer _Player) {
+	if (C_UseSimpleTeamsLayer) {
+		declare UI <=> UIManager.GetUI(_Player);
+		if (UI != Null) {
+			declare netwrite Net_NbPlayersBlue for UI = 0;
+			declare netwrite Net_NbPlayersRed for UI = 0;
+			
+			Net_NbPlayersBlue = ClansNbPlayersAlive[1];
+			Net_NbPlayersRed = ClansNbPlayersAlive[2];
+		}
+	}
+}
+
+// Update player position layer
+Void UpdatePositionLayer(CSmPlayer _Player) {
+	declare UI <=> UIManager.GetUI(_Player);
+	if (UI != Null) {
+		declare netwrite Net_LibInterface_LayerInfoUpdate for UI = 0;
+		declare netwrite Net_LibInterface_PosTotal for UI = 0;
+		declare netwrite Net_LibInterface_PosCurrent for UI = 0;
+		
+		Net_LibInterface_LayerInfoUpdate = Now;
+		Net_LibInterface_PosTotal = Scores.count;
+		Net_LibInterface_PosCurrent = Scores.keyof(_Player.Score) + 1;
+	}
+}
+
+// Calculates remaining drop time of balls
+Integer GetRemainingDropTime(Vec3 _BallPosi) {
+	if (G_DroppedBallsPosis.exists(_BallPosi)) {
+		declare DropTime = G_DroppedBallsTimes[_BallPosi];
+		return (DropTime + C_BallResetTime - Now) / 1000;
+	}
+	return -1;
+}
+
+// Generates Hud3dMarkers for all balls
+Text GetBallsHud3dMarkers() {
+	declare Markers = "";
+	
+	// Balls on ball spawn
+	if (G_BallCarryingPlayerIDs.count + G_DroppedBallsPosis.count < G_BallsCount) {
+		foreach (PoleId in G_BallsPolesIDs) {
+			declare Posi = BlockPoles[PoleId].Position;
+			declare BallText = "$0f0";
+			if (G_BallsPerPole[PoleId] > 1) {
+				// Multiple balls left
+				BallText ^= G_BallsPerPole[PoleId] ^" "^ T_Balls;
+			} else {
+				// Only one ball left
+				BallText ^= T_Ball;
+			}
+			Markers ^= """<marker label="$<{{{BallText}}}$>" pos="{{{Posi[0]}}} {{{Posi[1]}}} {{{Posi[2]}}}"/>""";
+		}
+	}
+	
+	// Balls carried by players
+	foreach (PlayerId in G_BallCarryingPlayerIDs) {
+		if (Players.existskey(PlayerId)) {
+			if (Players[PlayerId].IsFakePlayer) {
+				// Bot
+				Markers ^= """<marker label="$<{{{Teams[Players[PlayerId].CurrentClan-1].ColorText}}}{{{T_Ball}}}$>" pos="{{{Players[PlayerId].Position[0]}}} {{{Players[PlayerId].Position[1]}}} {{{Players[PlayerId].Position[2]}}}"/>""";
+			} else {
+				// Normal player
+				Markers ^= """<marker label="$<{{{Teams[Players[PlayerId].CurrentClan-1].ColorText}}}{{{T_Ball}}}$>" playerlogin="{{{Players[PlayerId].Login}}}"/>""";
+			}
+		}
+	}
+	
+	// Balls dropped elsewhere
+	foreach (BallPosi in G_DroppedBallsPosis) {
+		declare RemText = "";
+		declare RemTime = GetRemainingDropTime(BallPosi);
+		if (RemTime >= 0) {
+			RemText = """ ({{{RemTime}}})""";
+		}
+		Markers ^= """<marker label="$<$0f0{{{T_Ball}}}{{{RemText}}}$>" pos="{{{BallPosi[0]}}} {{{BallPosi[1]}}} {{{BallPosi[2]}}}"/>""";
+	}
+	
+	return Markers;
+}
+
+// Creates message for near miss
+Text GetNearMissMessage(CSmModeEvent _Event) {
+	// Catch invalid events
+	if (_Event.Type != CSmModeEvent::EType::OnNearMiss) return "";	// Wrong event type
+	if (_Event.MissDist <= 0.0) return "";							// Invalid miss distance
+	
+	// Get message text
+	declare Message = "";
+	declare Dist = MathLib::NearestInteger(_Event.MissDist * 1000);
+	if (Dist >= 10) {
+		Message = """You missed $<{{{_Event.Victim.Name}}}$> by {{{Dist/10.0}}}cm!""";
+	} else {
+		Dist = MathLib::NearestInteger(_Event.MissDist * 10000);
+		if (Dist >= 10) {
+			Message = """You missed $<{{{_Event.Victim.Name}}}$> by {{{Dist/10.0}}}mm!""";
+		} else {
+			Dist = MathLib::NearestInteger(_Event.MissDist * 10000000);
+			Message = """You missed $<{{{_Event.Victim.Name}}}$> by {{{Dist/10.0}}}µm!""";
+		}
+	}
+	return Message;
+}
+
+// Generates the manialink with all the information about the teams (balls & command posts)
+Void UpdateTeamInformationManialink(Boolean _PreLoad) {
+	if (G_LayerTeamInformation != Null) {
+		// Frame Positioning
+		declare FramePosition = "1000 0";
+		
+		// Balls
+		declare BlueCount = 0;
+		declare RedCount = 0;
+		foreach (PlayerId in G_BallCarryingPlayerIDs) {
+			if (Players.existskey(PlayerId)) {
+				if (Players[PlayerId].CurrentClan == 1) {
+					BlueCount += 1;
+				} else {
+					RedCount += 1;
+				}
+			}
+		}
+		
+		// Poles
+		declare BluePole = "";
+		if (G_CommandPostIDs.existskey(1)) {
+			if (G_ActiveCommandPostIDs.exists(G_CommandPostIDs[1])) {
+				// Active command post
+				BluePole = "http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/bluepole_v1.png";
+			} else {
+				// Inactive command post
+				BluePole = "http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/greypole_v1.png";
+			}
+		}
+		declare RedPole = "";
+		if (G_CommandPostIDs.existskey(2)) {
+			if (G_ActiveCommandPostIDs.exists(G_CommandPostIDs[2])) {
+				// Active command post
+				RedPole = "http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/redpole_v1.png";
+			} else {
+				// Inactive command post
+				RedPole = "http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/greypole_v1.png";
+			}
+		}
+		
+		if (C_TeamInformationAtTop) {
+			if (!_PreLoad) {
+				FramePosition = "0 73";
+			}
+			G_LayerTeamInformation.ManialinkPage = """
+<frame posn="{{{FramePosition}}}" halign="center" valign="center">
+	<quad posn="-13 0" sizen="8 8" halign="center" valign="center" image="http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/ball_v1.png"/>
+	<label posn="-12.5 0.5" sizen="8 8" scale="1.3" halign="center" valign="center" text="$00f$o{{{BlueCount}}}"/>
+	<quad posn="13 0" sizen="8 8" halign="center" valign="center" image="http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/ball_v1.png"/>
+	<label posn="13.5 0.5" sizen="8 8" scale="1.3" halign="center" valign="center" text="$f00$o{{{RedCount}}}"/>
+	
+	<quad posn="-22 0" sizen="10 10" halign="center" valign="center" image="{{{BluePole}}}"/>
+	<quad posn="22 0" sizen="10 10" halign="center" valign="center" image="{{{RedPole}}}"/>
+</frame>""";
+		} else {
+			if (!_PreLoad) {
+				FramePosition = "120 -63";
+			}
+			G_LayerTeamInformation.ManialinkPage = """
+<frame posn="{{{FramePosition}}}" halign="center" valign="center">
+	<quad posn="-8 0" sizen="8 8" halign="center" valign="center" image="http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/ball_v1.png"/>
+	<label posn="-7.5 0.5" sizen="8 8" scale="1.3" halign="center" valign="center" text="$00f$o{{{BlueCount}}}"/>
+	<quad posn="8 0" sizen="8 8" halign="center" valign="center" image="http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/ball_v1.png"/>
+	<label posn="8.5 0.5" sizen="8 8" scale="1.3" halign="center" valign="center" text="$f00$o{{{RedCount}}}"/>
+	
+	<quad posn="-8 -10" sizen="10 10" halign="center" valign="center" image="{{{BluePole}}}"/>
+	<quad posn="8 -10" sizen="10 10" halign="center" valign="center" image="{{{RedPole}}}"/>
+</frame>""";
+		}
+	}
+}
+
+Void UpdateTeamInformationManialink() {
+	UpdateTeamInformationManialink(False);
+}
+
+// Sends engineering activity as callback
+Void SendEngineeringCallback() {
+	declare Param = "";
+	foreach (Player in Players) {
+		declare Engineered for Player = 0;
+		declare LastUpdateEngineered for Player = 0;
+		if (Engineered > 0 && Engineered - LastUpdateEngineered > 0) {
+			Param ^= Player.Login^":"^MathLib::NearestInteger(((Engineered-LastUpdateEngineered)*1.0/C_CommandPostCaptureTime)*10000)/10000.0^";";
+			LastUpdateEngineered = Engineered;
+		}
+	}
+	if (Param != "") {
+		XmlRpc.SendCallback("engineering", Param);
+	}
+}
+
+// Get the current rankings for xmlrpc callbacks
+Text GetRankings() {
+	declare PlayerList = "";
+	foreach (Score in Scores) {
+		PlayerList ^= Score.User.Login^":"^Score.Points^";";
+	}
+	return PlayerList;
+}

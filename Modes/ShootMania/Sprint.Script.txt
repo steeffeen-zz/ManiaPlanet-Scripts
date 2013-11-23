@@ -1,0 +1,1312 @@
+/********************************************
+*	Sprint Game Mode						*
+*	Author: 	steeffeen					*
+*	Contact:	steeffeen@team-devota.com	*
+********************************************/
+
+#Extends "Modes/ShootMania/ModeBase.Script.txt"
+
+#Const	CompatibleMapTypes	"SprintArena,SprintCupArena,TimeAttackArena"
+#Const	Version				"0.5 (2013-09-08)"
+#Const	ScriptName			"Sprint.Script.txt"
+
+/*************************************
+	INCLUDES
+*************************************/
+
+#Include "MathLib" as MathLib
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Interface.Script.txt" as Interface
+#Include "Libs/Nadeo/Message.Script.txt" as Message
+#Include "Libs/Nadeo/TabsServer.Script.txt" as Tabs
+#Include "Libs/Nadeo/ShootMania/AFK.Script.txt" as AFK
+#Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
+#Include "Libs/Nadeo/ShootMania/ScoresTable.Script.txt" as ScoresTable
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+#Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
+#Include "Libs/steeffeen/CheckpointTimes.Script.txt" as CPTimes
+
+/*************************************
+	SETTINGS
+*************************************/
+
+#Setting	S_PointsLimit			125			as _("Points Limit")
+#Setting	S_PointsSystem			"sprint"	as _("Points System (sprint, f1, f1old, motogp, simple)")
+#Setting	S_RaceFinishLimit		15			as _("Time limit to end the Race after the first player finished")
+#Setting	S_WarmUpRounds			1			as _("Number of WarmUp rounds per Map")
+#Setting	S_EnablePvP				False		as _("Enable PvP Weapons")
+#Setting	S_WinMode				0			as _("Win Mode (0: First, 1: Cup, 2: ESL Cup, 3: Team)")
+
+#Setting	S_RoundTimeLimit		600			as "<hidden>"
+
+/*************************************
+	CONSTANTS
+*************************************/
+
+#Const		C_ChronoPosition		<50., -73.>		// Position of the chrono
+#Const		C_SpeedoMeterPosition	<-49., -73.>	// Position of speedometer
+#Const		C_RankingsListLength	10				// Length of rankings list
+#Const		C_RankingsListPosition	<-157., 47.>	// Position of rankings list and warmup label
+
+#Const		Description				_("$<$oObjective:$> Beat your Opponents in fast neck-and-neck races.")
+
+/*************************************
+	GLOBALES
+*************************************/
+
+declare Integer[]		G_PointsList;		// Current points list based on system setting
+declare Integer			G_RankListReset;	// Time when the rankings list needs to be cleared
+declare Boolean			G_WarmUp;			// Whether it's currently warmup
+declare Integer			G_MapRound;			// Number of the round on the current map
+declare Integer			G_CheckpointsCount;	// Number of checkpoints on the current map
+declare Ident[]			G_StartedPlayers;	// Ids of currently racing players
+declare Integer[Ident]	G_FinishedPlayers;	// Times of finished players
+declare Ident			G_RaceWinnerId;		// Id of the player who won the current round
+declare Ident			G_LastLeaderId;		// Id of the player score of who was leading before the current round
+
+/*************************************
+	LABELS
+*************************************/
+
+***LogVersion***
+***
+MB_LogVersion(ScriptName, Version);
+MB_LogVersion(Interface::GetScriptName(), Interface::GetScriptVersion());
+MB_LogVersion(Message::GetScriptName(), Message::GetScriptVersion());
+MB_LogVersion(Score::GetScriptName(), Score::GetScriptVersion());
+MB_LogVersion(ScoresTable::GetScriptName(), ScoresTable::GetScriptVersion());
+MB_LogVersion(SM::GetScriptName(), SM::GetScriptVersion());
+MB_LogVersion(SpawnScreen::GetScriptName(), SpawnScreen::GetScriptVersion());
+MB_LogVersion(Tabs::GetScriptName(), Tabs::GetScriptVersion());
+***
+
+***ModeStatusMessage***
+***
+declare Text Message;
+if (UseClans) {
+	declare Score = "$<"^Teams[0].ColorizedName^"$> "^ClanScores[0]^" : "^ClanScores[1]^" $<"^Teams[1].ColorizedName^"$>";
+	Message = TextLib::Compose("%1 (%2)\n$<$o%3:$> $<%4$>", Description, _("Team"), _("|Headline score|Current Score"), Score);
+} else {
+	if (Scores.existskey(0)) {
+		Message = TextLib::Compose("%1 (%2)\n$<$o%3:$> $<%4$>", Description, _("Solo"), _("|Headline leading player|Leading"), Scores[0].User.Name);
+	} else {
+		Message = TextLib::Compose("%1 (%2)", Description, _("Solo"));
+	}
+}
+ModeStatusMessage = Message;
+***
+
+***Rules***
+***
+SpawnScreen::ResetRulesSection();
+
+declare RulesSection = TextLib::Compose("%1\n%2",
+	_("You have to finish the round based Races as fast as possible."),
+	_("Each Race grants Points for the best Players."));
+SpawnScreen::AddSubsection(_("Rules"), RulesSection, 5.);
+
+declare Text ModeSection;
+switch (S_WinMode) {
+	case 1: {
+		ModeSection = TextLib::Compose("%1\n%2",
+			_("To win you have to reach the Points Limit to become a Finalist."),
+			_("As a Finalist you have to win one more Round to win the Match."));
+	}
+	case 2: {
+		ModeSection = TextLib::Compose("%1\n%2",
+			_("To win you have to reach the Points Limit and lead the Ranking to become a Finalist."),
+			_("As a Finalist you have to win one more Round to win the Match."));
+	}
+	case 3: {
+		ModeSection = TextLib::Compose("%1\n%2",
+			_("Player points sum up for their Teams and the Team with the most Points wins the Round."),
+			_("The Team that reaches the Points Limit first wins the Match."));
+	}
+	default: {
+		ModeSection = TextLib::Compose("%1",
+			_("The Player who reaches the Points Limit first wins the Map."));
+	}
+}
+SpawnScreen::AddSubsection(GetModeText(S_WinMode), ModeSection, 35.);
+
+declare CPTimesSection = TextLib::Compose("%1",
+	_("You can see your checkpoint and finish times in the top left. (Toggle with F3.)"));
+SpawnScreen::AddSubsection(_("|Checkpoint Times|Checkpoint Times"), CPTimesSection, 75.);
+
+if (S_EnablePvP) {
+	declare PvPSection = TextLib::Compose("%1", _("Player versus Player is enabled! You can interfere your opponents by shooting them."));
+	SpawnScreen::AddSubsection(_("|Player versus Player|PvP"), PvPSection, 105.);
+}
+
+SpawnScreen::CreatePrettyRules("Sprint");
+***
+
+***StartServer***
+***
+// Set mode options
+UsePvPCollisions = False;
+UsePvPWeapons = S_EnablePvP;
+UseClans = False;
+MB_UseSectionRound = True;
+
+// UI
+---ModeStatusMessage---
+SM::SetupDefaultVisibility();
+SpawnScreen::SetModeName("Sprint");
+SpawnScreen::CreateMapInfo();
+SpawnScreen::CreateScores();
+---Rules---
+Interface::CreateRank();
+
+// Tabs
+Tabs::Load();
+declare TabsLayer = Tabs::CreateTabPaneLayer(["ScoresTab" => "Rankings", "CPTimes" => "Race"], 22, -4, False);
+TabsLayer.Type = CUILayer::EUILayerType::AltMenu;
+UIManager.UIAll.UILayers.add(TabsLayer);
+
+// Scorestable
+ScoresTable::Load();
+ScoresTable::SetTableWidth(201.);
+ScoresTable::SetTableFormat(2, 6);
+ScoresTable::SetTableBackgroundImage("file://Media/Manialinks/ShootMania/Common/topsBg.dds", <0.05, 56.>, <220., 180.>);
+ScoresTable::SetColumnsWidth(2.5, 1.5, 2.5, 15., 1.7, 1.7, 1., 3.5, 0.5, 0., 4.);
+ScoresTable::SetColumnName("Custom1", "F");
+ScoresTable::SetColumnName("Custom2", _("|Best result|Best"));
+ScoresTable::SetColumnName("Points", _("Points"));
+ScoresTable::SetDefaultCustom1("");
+ScoresTable::SetDefaultCustom2("-:--.--");
+ScoresTable::SetScoreFormat("$o");
+ScoresTable::SetDefaultFooterScore(" ");
+ScoresTable::SetDefaultFooterStats(TextLib::Compose("%1: %2", _("Points Limit"), TextLib::ToText(S_PointsLimit)));
+ScoresTable::Build();
+
+// CPTimes
+CPTimes::Load("CPTimes");
+CPTimes::SetBackgroundImage("file://Media/Manialinks/ShootMania/Common/topsBg.dds", <220., 180.>, <0., 8.>);
+CPTimes::Build();
+
+// Layers
+declare MarkersLayer <=> UIManager.UILayerCreate();
+MarkersLayer.Type = CUILayer::EUILayerType::Markers;
+UIManager.UIAll.UILayers.add(MarkersLayer);
+
+declare ExtrasLayer <=> UIManager.UILayerCreate();
+ExtrasLayer.ManialinkPage = GetExtrasLayerManialink();
+UIManager.UIAll.UILayers.add(ExtrasLayer);
+
+declare RankingsLayer <=> UIManager.UILayerCreate();
+UIManager.UIAll.UILayers.add(RankingsLayer);
+***
+
+***StartMap***
+***
+// New map message
+Message::CleanAllMessages();
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+
+// Prepare map
+G_LastLeaderId = NullId;
+foreach (Base in Bases) {
+	Base.Clan = 0;
+	Base.IsActive = True;
+}
+G_CheckpointsCount = 0;
+foreach (Pole in BlockPoles) {
+	Pole.Gauge.ValueReal = 1.0;
+	Pole.Captured = True;
+	switch (Pole.Tag) {
+		case "Checkpoint": {
+			if (Pole.Order < 0) continue;
+			G_CheckpointsCount += 1;
+		}	
+	}
+}
+{
+	declare netwrite Integer Net_CheckpointsCount for Teams[0];
+	Net_CheckpointsCount = G_CheckpointsCount;
+	CPTimes::SetNbCheckpoints(G_CheckpointsCount);
+	CPTimes::ResetTimes();
+}
+
+// Wait for players to join
+while (AllPlayers.count <= 0) {
+	MB_Yield();
+}
+
+// Begin map
+foreach (Player in AllPlayers) {
+	InitPlayer(Player, True);
+}
+
+Score::MatchBegin();
+Score::RoundBegin();
+ScoresTable::StartMatch();
+foreach (Player in AllPlayers) {
+	ScoresTable::SetCustom2(Player, "");
+}
+UpdateFooterStats();
+G_WarmUp = True;
+G_MapRound = 0;
+
+ExtrasLayer.IsVisible = True;
+UIManager.UIAll.Hud3dMarkers = GetHud3dMarkers();
+MarkersLayer.ManialinkPage = GetMarkersManialink();
+MarkersLayer.IsVisible = True;
+RankingsLayer.IsVisible = True;
+***
+
+***StartRound***
+***
+G_StartedPlayers.clear();
+G_FinishedPlayers.clear();
+G_RaceWinnerId = NullId;
+
+// Update points system
+declare OldPointsSystem for This = "";
+if (OldPointsSystem != S_PointsSystem) {
+	OldPointsSystem = S_PointsSystem;
+	G_PointsList = GetPointsList();
+	RankingsLayer.ManialinkPage = GetRankingsLayerManialink();
+}
+
+G_MapRound += 1;
+G_WarmUp = (G_MapRound <= S_WarmUpRounds && S_WarmUpRounds > 0);
+{
+	declare netwrite Text Net_RemainingWarmUp for Teams[0];
+	if (G_WarmUp) {
+		Net_RemainingWarmUp = G_MapRound^"/"^S_WarmUpRounds;
+		Message::SendStatusMessage(TextLib::Compose("$fc0%1", _("WarmUp!")), 4000, 3, CUIConfig::EUISound::StartRound, 0);
+	} else {
+		Net_RemainingWarmUp = "";
+	}
+}
+Message::CleanBigMessages();
+if (G_MapRound == S_WarmUpRounds+1 || (S_WarmUpRounds < 0 && G_MapRound == 1)) {
+	Message::SendBigMessage(_("Match Start!"), 2000, 2, CUIConfig::EUISound::StartRound, 0);
+}
+
+Synchronize();
+
+G_RankListReset = Now + 2500;
+UIManager.UIAll.OverlayHideCountdown = True;
+StartTime = Now + 3000;
+EndTime = -1;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+
+UpdateExtrasLayer();
+declare netwrite Integer Net_CurrentCP for Teams[0];
+Net_CurrentCP = -1;
+UpdateFinalists();
+***
+
+***OnNewPlayer***
+***
+InitPlayer(Player, False);
+ScoresTable::RestoreCustomScores(Player);
+declare UI <=> UIManager.GetUI(Player);
+if (UI == Null) continue;
+Tabs::UseTabs(UI, "ScoresTab");
+***
+
+***OnNewSpectator***
+***
+InitPlayer(Spectator, False);
+ScoresTable::RestoreCustomScores(Spectator);
+declare UI <=> UIManager.GetUI(Spectator);
+if (UI == Null) continue;
+Tabs::UseTabs(UI, "ScoresTab");
+***
+
+***Yield***
+***
+AFK::ManageAFKPlayers();
+Message::Loop();
+Tabs::XmlRpcLoop();
+***
+
+***PlayLoop***
+***
+if (G_RankListReset > 0 && Now >= G_RankListReset) {
+	G_RankListReset = -1;
+	foreach (Player in AllPlayers) {
+		declare netwrite Integer Net_CurrentTime for Player;
+		Net_CurrentTime = -1;
+	}
+}
+CheckScriptSettings();
+UpdateExtrasLayer();
+
+// Manage events
+foreach (Event in PendingEvents) {
+	switch (Event.Type) {
+		case CSmModeEvent::EType::OnArmorEmpty: {
+			RestartPlayer(Event.Victim, True, Now+3000);
+			Discard(Event);
+		}
+		case CSmModeEvent::EType::OnPlayerRequestRespawn: {
+			RestartPlayer(Event.Player, True, Now+3000);
+			Discard(Event);
+		}
+		case CSmModeEvent::EType::OnHit: {
+			Discard(Event);
+		}
+		default: {
+			PassOn(Event);
+		}
+	}
+}
+
+// Manage players
+foreach (Player in Players) {
+	switch (Player.SpawnStatus) {
+		case CSmPlayer::ESpawnStatus::NotSpawned: {
+			if (G_StartedPlayers.exists(Player.Id) || G_FinishedPlayers.existskey(Player.Id)) continue;
+			RestartPlayer(Player, False, StartTime);
+		}
+		case CSmPlayer::ESpawnStatus::Spawned: {
+			if (Player.BlockPole == Null || Player.BlockPole.Order < 0) continue;
+			declare CheckpointsTimes for Player = Integer[Ident];
+			switch (Player.BlockPole.Tag) {
+				case "Checkpoint": {
+					ActivateCheckpoint(Player, Player.BlockPole.Id);
+				}
+				case "Goal": {
+					ActivateFinish(Player);
+				}
+			}
+		}
+	}
+}
+
+// Round end conditions
+if (EndTime > 0 && Now >= EndTime + 400 || Now - StartTime > S_RoundTimeLimit * 1000 || G_StartedPlayers.count > 0
+	&& (PlayersNbAlive == 0 || G_FinishedPlayers.count >= G_StartedPlayers.count)) {
+	MB_StopRound = True;
+	if (Now - StartTime > S_RoundTimeLimit * 1000) {
+		Message::SendStatusMessage(_("Time is up!"), 2000, 0);
+	}
+}
+***
+
+***EndRound***
+***
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+
+// Determine and announce round winner
+declare RaceWinTime = -1;
+if (G_FinishedPlayers.existskey(G_RaceWinnerId)) {
+	RaceWinTime = G_FinishedPlayers[G_RaceWinnerId];
+}
+declare CSmPlayer Winner <=> Null;
+if (Players.existskey(G_RaceWinnerId)) {
+	Winner <=> Players[G_RaceWinnerId];
+}
+MB_Sleep(500);
+if (!G_WarmUp && Winner != Null) {
+	Message::SendBigMessage(TextLib::Compose(_("%1 wins the Round!"), "$<"^Winner.Name^"$>"), 3000, 1, CUIConfig::EUISound::EndRound, 0);
+}
+MB_Sleep(1000);
+
+UIManager.UIAll.OverlayHideCountdown = True;
+EndTime = -1;
+StartTime = -1;
+UpdateExtrasLayer();
+
+// Match end conditions
+if (AllPlayers.count <= 0) {
+	// Server is empty - Next map to start WarmUp
+	MB_StopMap = True;
+} else {
+	switch (S_WinMode) {
+		case 1: {
+			// Cup mode
+			if (Winner != Null && Winner.Score != Null && Winner.Score.Points >= S_PointsLimit) {
+				declare Finalist for Winner.Score = False;
+				if (Finalist) {
+					MB_StopMap = True;
+					G_LastLeaderId = Winner.Score.Id;
+				}
+			}
+		}
+		case 2: {
+			// ESL cup mode
+			if (Winner != Null && Winner.Score != Null && Winner.Score.Id == G_LastLeaderId) {
+				MB_StopMap = True;
+			}
+		}
+		default: {
+			// First wins
+			if (Scores.existskey(0) && Scores[0].Points >= S_PointsLimit) {
+				MB_StopMap = True;
+				declare WinnerScore <=> Scores[0];
+				foreach (Score in Scores) {
+					if (Score == WinnerScore) continue;
+					if (Score.Points < S_PointsLimit) break;
+					declare BestRunTime as BestRunTimeWinner for WinnerScore = -1;
+					declare BestRunTime as BestRunTimeThis for Score = -1;
+					if (Score.Points > WinnerScore.Points || (Score.Points == WinnerScore.Points && BestRunTimeThis < BestRunTimeWinner)) {
+						WinnerScore <=> Score;
+					}
+				}
+				G_LastLeaderId = WinnerScore.Id;
+			}
+		}
+	}
+	if (!MB_StopMap) {
+		SM::UnspawnAllPlayers();
+		if (Scores.existskey(0) && Scores[0].Points >= S_PointsLimit) {
+			G_LastLeaderId = Scores[0].Id;
+		} else {
+			G_LastLeaderId = NullId;
+		}
+	}
+	UpdateFinalists();
+	MB_Sleep(2500);
+}
+***
+
+***EndMap***
+***
+Score::RoundEnd();
+Score::MatchEnd();
+ScoresTable::EndMatch();
+
+ExtrasLayer.IsVisible = False;
+MarkersLayer.IsVisible = False;
+RankingsLayer.IsVisible = False;
+
+// Determine and announce winner
+declare CSmScore Winner <=> Null;
+if (Scores.existskey(G_LastLeaderId)) Winner <=> Scores[G_LastLeaderId];
+
+declare Message = _("|Match|Draw");
+if (Winner != Null && Winner.User != Null) {
+	Message = TextLib::Compose(_("%1 wins the Match!"), "$<"^Winner.User.Name^"$>");
+}
+Message::SendBigMessage(Message, 5000, 2, CUIConfig::EUISound::EndMatch, 0);
+MB_Sleep(3000);
+
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+MB_Sleep(5000);
+***
+
+***EndServer***
+***
+CPTimes::Unload();
+ScoresTable::Unload();
+Interface::DestroyRank();
+SpawnScreen::DestroyRules();
+SpawnScreen::DestroyMapInfo();
+SpawnScreen::DestroyScores();
+UIManager.UILayerDestroyAll();
+***
+
+/*************************************
+	FUNCTIONS
+*************************************/
+
+// Get points list from system
+Integer[] GetPointsList() {
+	switch (S_PointsSystem) {
+		case "f1": {
+			// Formula 1 GP
+			return [25, 18, 15, 12, 10, 8, 6, 4, 2, 1];
+		}
+		case "f1old": {
+			// Folmula 1 GP (OLD)
+			return [10, 8, 6, 5, 4, 3, 2, 1];
+		}
+		case "motogp": {
+			// MotoGP
+			return [25, 120, 16, 13, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
+		}
+		case "simple": {
+			// Simply based on player count
+			declare Integer[] PointsList;
+			for (Index, 0, Players.count) {
+				PointsList.add(Players.count - Index);
+			}
+			return PointsList;
+		}
+	}
+	// Default sprint points
+	return [25, 18, 15, 12, 10, 8, 6, 4, 2, 1];
+}
+
+// Synchronize players and wait for despawned
+Void Synchronize() {
+	declare Ready = False;
+	while (!Ready) {
+		Ready = True;
+		foreach (Player in Players) {
+			if (Player.SpawnStatus != CSmPlayer::ESpawnStatus::NotSpawned) {
+				UnspawnPlayer(Player);
+				Ready = False;
+			}
+		}
+	}
+	Mode::Synchro_DoBarrier();
+}
+
+// Update finalist status of all players
+Void UpdateFinalists() {
+	foreach (Score in Scores) {
+		declare Boolean Finalist for Score;
+		Finalist = (Score.Points >= S_PointsLimit);
+	}
+	foreach (Player in AllPlayers) {
+		if (Player.Score == Null) continue;
+		declare Finalist for Player.Score = False;
+		declare Data = "";
+		if (Finalist) {
+			Data = "$0f0Ξ";
+		}
+		ScoresTable::SetCustom1(Player, Data);
+	}
+}
+
+// Get mode text from mode number
+Text GetModeText(Integer _Mode) {
+	switch (_Mode) {
+		case 1: {
+			return _("Cup Mode");
+		}
+		case 2: {
+			return _("ESL Cup Mode");
+		}
+		case 3: {
+			return _("Team Mode");
+		}
+	}
+	return _("First Wins");
+}
+
+// Update the footer stats of each player
+Void UpdateFooterStats() {
+	declare Message = TextLib::Compose("%1, %2: %3", GetModeText(S_WinMode), _("Points Limit"), TextLib::ToText(S_PointsLimit));
+	foreach (Player in AllPlayers) {
+		ScoresTable::SetFooterStats(Player, Message);
+	}
+}
+
+// Check for changes of script settings
+Void CheckScriptSettings() {
+	declare UpdateRules = False;
+	declare UpdateFooterStats = False;
+	
+	// Update points limit
+	declare OldPointsLimit for This = S_PointsLimit;
+	if (OldPointsLimit != S_PointsLimit) {
+		OldPointsLimit = S_PointsLimit;
+		UpdateFooterStats = True;
+	}
+	
+	// Check win mode (0: First, 1: Cup, 2: ESL Cup, 3: Team)
+	declare OldWinMode for This = S_WinMode;
+	if (OldWinMode != S_WinMode) {
+		OldWinMode = S_WinMode;
+		UpdateRules = True;
+		UpdateFooterStats = True;
+		
+		declare Text Message;
+		switch (S_WinMode) {
+			case 1: {
+				Message = "Info>> Now playing in $<$f80Cup Mode$>!";
+			}
+			case 2: {
+				Message = "Info>> Now playing in $<$f80ESL Cup Mode$>!";
+			}
+			case 3: {
+				Message = "Info>> Now playing in $<$f80Team Mode$>!";
+			}
+			default: {
+				Message = "Info>> Now playing until the first Player reaches the $<$f80Points Limit$>!";
+			}
+		}
+		UIManager.UIAll.SendChat(Message);
+	}
+	
+	// Check enable pvp
+	if (UsePvPWeapons != S_EnablePvP) {
+		UsePvPWeapons = S_EnablePvP;
+		UpdateRules = True;
+		
+		declare Color = "$0f0";
+		declare Status = "";
+		if (!UsePvPWeapons) {
+			Color = "$f00";
+			Status = "de";
+		}
+		UIManager.UIAll.SendChat("Info>> $<$f80PvP Weapons$> are now $<"^Color^Status^"activated$>!");
+	}
+	
+	if (UpdateRules) {
+		---Rules---
+	}
+	if (UpdateFooterStats) {
+		UpdateFooterStats();
+	}
+}
+
+// Determine CPSpawn for checkpoint respawns
+Ident GetCPSpawnId(CSmPlayer _Player) {
+	if (_Player == Null) return NullId;
+	declare LastCheckPointId for _Player = NullId;
+	if (!BlockPoles.existskey(LastCheckPointId)) return NullId;
+	declare SpawnId = NullId;
+	declare CPPole <=> BlockPoles[LastCheckPointId];
+	if (CPPole.Order != 0) {
+		// Find assigned CPSpawn
+		foreach (Spawn in BlockSpawns) {
+			switch (Spawn.Tag) {
+				case "CPSpawn": {
+					if (Spawn.Order == CPPole.Order) {
+						return Spawn.Id;
+					}
+				}
+			}
+		}
+	}
+	// No specific CPSpawn assigned, determine closest one
+	declare Distance = -1.;
+	foreach (Spawn in BlockSpawns) {
+		switch (Spawn.Tag) {
+			case "CPSpawn": {
+				if (Spawn.Order > CPPole.Order) continue;
+				declare SpawnDistance = MathLib::Distance(Spawn.Position, CPPole.Position);
+				if (SpawnDistance < Distance || Distance < 0) {
+					SpawnId = Spawn.Id;
+					Distance = SpawnDistance;
+				}
+			}
+		}
+	}
+	return SpawnId;
+}
+
+// Initialize the player
+Void InitPlayer(CSmPlayer _Player, Boolean _Full) {
+	if (_Player == Null) return;
+	
+	declare Ident LastCheckPointId for _Player;
+	declare Integer[Ident] CheckpointsTimes for _Player;
+	LastCheckPointId = NullId;
+	CheckpointsTimes.clear();
+	
+	declare Temp = G_StartedPlayers.remove(_Player.Id);
+	Temp = G_FinishedPlayers.removekey(_Player.Id);
+	
+	if (!_Full || _Player.Score == Null) return;
+	
+	declare Integer BestRunTime for _Player.Score;
+	BestRunTime = -1;
+}
+
+// Update footer score for given player
+Void UpdateFooterScore(CSmPlayer _Player) {
+	if (_Player == Null) return;
+	
+	if (G_FinishedPlayers.existskey(_Player.Id)) {
+		ScoresTable::SetFooterScore(_Player, TextLib::Compose(_("Race Rank: %1/%2"),
+			TextLib::ToText(G_FinishedPlayers.count), TextLib::ToText(G_StartedPlayers.count)));
+	} else {
+		declare CheckpointsTimes for _Player = Integer[Ident];
+		ScoresTable::SetFooterScore(_Player, TextLib::Compose(_("|Progress on checkpoints|Progress: CP %1/%2"),
+			TextLib::ToText(CheckpointsTimes.count), TextLib::ToText(G_CheckpointsCount)));
+	}
+}
+
+// Restart a player
+Void RestartPlayer(CSmPlayer _Player, Boolean _UseCPSpawns, Integer _StartTime) {
+	if (_Player == Null) return;
+	UnspawnPlayer(_Player);
+	if (_Player.RequestsSpectate) return;
+	
+	declare Clan = 0;
+	if (UseClans) {
+		Clan = _Player.RequestedClan;
+	}
+	
+	if (_StartTime != StartTime) {
+		UIManager.UIAll.SendNotice(TextLib::Compose(_("%1 respawned!"), "$<"^_Player.Name^"$>"),
+			CUIConfig::ENoticeLevel::PlayerInfo, _Player.User, CUIConfig::EAvatarVariant::Default,
+			CUIConfig::EUISound::Silence, 0);
+	}
+	
+	if (_UseCPSpawns) {
+		declare CPSpawnId = GetCPSpawnId(_Player);
+		if (BlockSpawns.existskey(CPSpawnId)) {
+			SM::SpawnPlayer(_Player, Clan, BlockSpawns[CPSpawnId], _StartTime);
+			return;
+		}
+	}
+	
+	declare Ident LastCheckPointId for _Player;
+	declare CheckpointsTimes for _Player = Integer[Ident];
+	declare netwrite Integer[Integer] Net_CPTimes for _Player;
+	LastCheckPointId = NullId;
+	CheckpointsTimes.clear();
+	Net_CPTimes.clear();
+	
+	if (!G_StartedPlayers.exists(_Player.Id)) {
+		G_StartedPlayers.add(_Player.Id);
+	}
+	UpdateFooterScore(_Player);
+	
+	SM::SpawnPlayer(_Player, Clan, SM::GetSpawn("Spawn", 0), _StartTime);
+}
+
+// A player reaches a checkpoint
+Void ActivateCheckpoint(CSmPlayer _Player, Ident _CheckpointId) {
+	if (_Player == Null) return;
+	if (!BlockPoles.existskey(_CheckpointId)) return;
+	
+	declare CheckpointsTimes for _Player = Integer[Ident];
+	if (CheckpointsTimes.existskey(_CheckpointId)) return;
+	if (BlockPoles[_CheckpointId].Order != 0 && BlockPoles[_CheckpointId].Order != CheckpointsTimes.count+1) {
+		declare LastStatusMessage for _Player = 0;
+		if (LastStatusMessage + 3000 < Now) {
+			LastStatusMessage = Now;
+			Message::SendStatusMessage(_Player, _("Wrong Checkpoint!"), 3000, 1);
+		}
+		return;
+	}
+	
+	CheckpointsTimes[_CheckpointId] = Now - StartTime;
+	declare Ident LastCheckPointId for _Player;
+	
+	declare CPTime = Now - StartTime;
+	if (CheckpointsTimes.existskey(LastCheckPointId)) {
+		CPTime -= CheckpointsTimes[LastCheckPointId];
+	}
+	declare NewRecord = CPTimes::SubmitCheckpointTime(CheckpointsTimes.count, _Player, CPTime);
+	
+	LastCheckPointId = _CheckpointId;
+	
+	declare netwrite Integer Net_CurrentCP for Teams[0];
+	if (Net_CurrentCP != 0 && Net_CurrentCP < CheckpointsTimes.count) {
+		Net_CurrentCP = CheckpointsTimes.count;
+	}
+	declare netwrite Integer[Integer] Net_CPTimes for _Player;
+	Net_CPTimes[CheckpointsTimes.count] = CheckpointsTimes[_CheckpointId];
+	
+	UpdateFooterScore(_Player);
+	
+	declare UI <=> UIManager.GetUI(_Player);
+	if (UI != Null) {
+		UI.SendNotice(TextLib::Compose("%1 %2/%3: %4", _("Checkpoint"),
+			TextLib::ToText(CheckpointsTimes.count), TextLib::ToText(G_CheckpointsCount),
+			TextLib::TimeToText(Now - StartTime, True)),
+			CUIConfig::ENoticeLevel::MapInfo, _Player.User, CUIConfig::EAvatarVariant::Default,
+			CUIConfig::EUISound::Checkpoint, CheckpointsTimes.count);
+	}
+}
+
+// Calculate race points depending on finished players
+Integer GetFinishPoints(Integer _Rank, Integer _Points) {
+	if (G_WarmUp) return 0;
+	if (!G_PointsList.existskey(_Rank - 1)) return G_PointsList[G_PointsList.count-1];
+	declare Points = G_PointsList[_Rank - 1];
+	switch (S_WinMode) {
+		case 1: {
+			if (Points + _Points > S_PointsLimit) {
+				return S_PointsLimit - _Points;
+			}
+		}
+	}
+	return Points;
+}
+
+// A player reaches the goal
+Void ActivateFinish(CSmPlayer _Player) {
+	if (_Player == Null) return;
+	if (G_FinishedPlayers.existskey(_Player.Id)) return;
+	
+	declare CheckpointsTimes for _Player = Integer[Ident];
+	if (CheckpointsTimes.count < G_CheckpointsCount) {
+		declare LastStatusMessage for _Player = 0;
+		if (LastStatusMessage + 3000 < Now) {
+			LastStatusMessage = Now;
+			declare MissedCPs = G_CheckpointsCount - CheckpointsTimes.count;
+			declare Text Message;
+			if (MissedCPs > 1) {
+				Message = TextLib::Compose(_("You missed %2 Checkpoints!"), TextLib::ToText(MissedCPs));
+			} else {
+				Message = _("You missed a Checkpoint!");
+			}
+			Message::SendStatusMessage(_Player, TextLib::Compose("$f00%1", Message), 3000, 1);
+		}
+		return;
+	}
+	
+	declare RunTime = Now - StartTime;
+	
+	if (_Player.Score != Null && !G_WarmUp) {
+		_Player.Score.Points += GetFinishPoints(G_FinishedPlayers.count+1, _Player.Score.Points);
+		declare BestRunTime for _Player.Score = -1;
+		if (RunTime < BestRunTime || BestRunTime < 0) {
+			BestRunTime = RunTime;
+			ScoresTable::SetCustom2(_Player, TextLib::TimeToText(RunTime, True));
+		}
+	}
+	
+	if (G_RaceWinnerId == NullId) {
+		G_RaceWinnerId = _Player.Id;
+	}
+	G_FinishedPlayers[_Player.Id] = RunTime;
+	if (G_FinishedPlayers.count == 1) {
+		foreach (PlayerId in G_StartedPlayers) {
+			if (G_FinishedPlayers.existskey(PlayerId) || !Players.existskey(PlayerId)) continue;
+			Message::SendStatusMessage(Players[PlayerId], _("Hurry!"), 4000, 0);
+		}
+	}
+	
+	declare netwrite Integer Net_CurrentCP for Teams[0];
+	Net_CurrentCP = 0;
+	declare netwrite Integer[Integer] Net_CPTimes for _Player;
+	Net_CPTimes[Net_CurrentCP] = RunTime;
+	UpdateFooterScore(_Player);
+
+	if (MB_UseScriptCallbacks) {
+		XmlRpc.SendCallback("Finished", """{"Login":"{{{_Player.Login}}}", "Score":{{{RunTime}}}}""");
+	}
+	declare UI <=> UIManager.GetUI(_Player);
+	if (UI != Null) {
+		UI.SendNotice(TextLib::Compose(_("Finish: %1"), TextLib::TimeToText(RunTime, True)),
+			CUIConfig::ENoticeLevel::MatchInfo, _Player.User, CUIConfig::EAvatarVariant::Default,
+			CUIConfig::EUISound::Finish, 0);
+	}
+	
+	if (EndTime < 0) {
+		EndTime = Now + S_RaceFinishLimit * 1000;
+		UIManager.UIAll.OverlayHideCountdown = False;
+	}
+	
+	UnspawnPlayer(_Player);
+}
+
+// Create hud3dmarkers
+Text GetHud3dMarkers() {
+	declare Markers = "";
+	foreach (Pole in BlockPoles) {
+		Markers ^= """<marker pos="{{{Pole.Position[0]}}} {{{Pole.Position[1]}}} {{{Pole.Position[2]}}}" box="0 4 0"
+			manialinkframeid="Frame_Pole{{{Pole.Id}}}" visibility="WhenInFrustum"/>""";
+	}
+	return Markers;
+}
+
+// Create manialink for markers layer
+Text GetMarkersManialink() {
+	declare Manialink = """<script><!--
+	#Include "TextLib" as TextLib
+	
+	declare CMlFrame[] G_Frame_Poles;
+	
+	Void ShowMarkerForPole(Ident _PoleId, Boolean _Goal) {
+		declare Frame_Pole <=> (Page.GetFirstChild("Frame_Pole"^_PoleId) as CMlFrame);
+		Frame_Pole.Visible = True;
+		foreach (Control in Frame_Pole.Controls) {
+			Control.Visible = True;
+		}
+		declare Label_NextCP <=> (Frame_Pole.GetFirstChild("Label_NextCP") as CMlLabel);
+		if (_Goal) {
+			Label_NextCP.Value = _("Finish");
+		} else {
+			Label_NextCP.Value = TextLib::Compose(_("|Checkpoint No.|CP %1"),
+				TextLib::ToText(BlockPoles[_PoleId].Order));
+		}
+		G_Frame_Poles.add(Frame_Pole);
+	}
+	
+	Void HideFrames(CMlFrame[] _Frames) {
+		foreach (Frame in _Frames) {
+			Frame.Visible = False;
+			foreach (Control in Frame.Controls) {
+				Control.Visible = False;
+			}
+		}
+	}
+	
+	main() {
+		wait(InputPlayer != Null);
+		
+		declare netread Net_CheckpointsCount for Teams[0] = -1;
+		declare Old_CheckpointsCount = -2;
+		
+		while (True) {
+			yield;
+			
+			declare LocalPlayer <=> InputPlayer;
+			if (IsSpectatorMode && GUIPlayer == Null) {
+				HideFrames(G_Frame_Poles);
+				G_Frame_Poles.clear();
+				continue;
+			}
+			if (GUIPlayer != Null) LocalPlayer <=> GUIPlayer;
+			
+			declare netread Net_CPTimes for LocalPlayer = Integer[Integer];
+			if (Old_CheckpointsCount == Net_CPTimes.count) continue;
+			Old_CheckpointsCount = Net_CPTimes.count;
+			
+			HideFrames(G_Frame_Poles);
+			G_Frame_Poles.clear();
+			
+			if (Old_CheckpointsCount == Net_CheckpointsCount) {
+				foreach (Pole in BlockPoles) {
+					switch (Pole.Tag) {
+						case "Goal": {
+							ShowMarkerForPole(Pole.Id, True);
+						}
+					}
+				}
+			} else {
+				foreach (Pole in BlockPoles) {
+					if (Pole.Order == Old_CheckpointsCount + 1) {
+						ShowMarkerForPole(Pole.Id, False);
+						break;
+					}
+				}
+			}
+		}
+	}
+	--></script>
+	<framemodel id="FrameModel_Pole">
+		<label id="Label_NextCP" textprefix="$o" textsize="2" hidden="1" halign="center" valign="center2"/>
+		<quad posn="0 -1.5" sizen="4 4" opacity="0.85" halign="center" valign="top" hidden="1"
+			image="http://www.team-devota.com/steeffeen/images/MarkerArrowDown.png"/>
+	</framemodel>""";
+	foreach (Pole in BlockPoles) {
+		Manialink ^= """<frameinstance modelid="FrameModel_Pole" id="Frame_Pole{{{Pole.Id}}}" hidden="1"/>""";
+	}
+	return Manialink;
+}
+
+// Create manialink for extras layer
+Text GetExtrasLayerManialink() {
+	declare WarmUpFlagWidth = 0.5;
+	return """<script><!--
+		#Include "MathLib" as MathLib
+		#Include "TextLib" as TextLib
+		
+		Real Round(Real _Value) {
+			return MathLib::NearestInteger(_Value * 10.) / 10.;
+		}
+		
+		main() {
+			wait(InputPlayer != Null);
+			
+			declare Frame_WarmUp		<=> (Page.GetFirstChild("Frame_WarmUp") as CMlFrame);
+			declare Label_WarmUp		<=> (Frame_WarmUp.GetFirstChild("Label_WarmUp") as CMlLabel);
+			
+			declare Frame_Chrono		<=> (Page.GetFirstChild("Frame_Chrono") as CMlFrame);
+			declare Label_Chrono		<=> (Frame_Chrono.GetFirstChild("Label_Chrono") as CMlLabel);
+			
+			declare Frame_SpeedoMeter	<=> (Page.GetFirstChild("Frame_SpeedoMeter") as CMlFrame);
+			declare Label_Speed			<=> (Frame_SpeedoMeter.GetFirstChild("Label_Speed") as CMlLabel);
+			
+			declare netread Net_RemainingWarmUp for Teams[0] = "";
+			declare Old_RemainingWarmUp = "";
+			
+			declare netread Net_StartTime for Teams[0] = -1;
+			declare LastStartTime = -1;
+			
+			declare Vec3 LastPosition;
+			declare LastPositionTime = -1;
+			declare LastSpeed = -1.;
+			
+			while (True) {
+				yield;
+				
+				declare LocalPlayer <=> InputPlayer;
+				if (GUIPlayer != Null) LocalPlayer <=> GUIPlayer;
+				
+				// Events
+				foreach (Event in PendingEvents) {
+					switch (Event.Type) {
+						case CMlEvent::Type::KeyPress: {
+							switch (Event.KeyCode) {
+								case 29: {
+									// Delete
+									if (IsSpectatorMode || InputPlayer.SpawnStatus != CSmPlayer::ESpawnStatus::Spawned) {
+										continue;
+									}
+									declare netwrite Integer Net_RetireTime for UI;
+									Net_RetireTime = ArenaNow;
+								}
+							}
+						}
+					}
+				}
+				
+				// WarmUp
+				if (Old_RemainingWarmUp != Net_RemainingWarmUp) {
+					Old_RemainingWarmUp = Net_RemainingWarmUp;
+					if (Net_RemainingWarmUp != "") {
+						Frame_WarmUp.Visible = True;
+						Label_WarmUp.Value = TextLib::Compose("%1: %2", _("WarmUp"), Net_RemainingWarmUp);
+					} else {
+						Frame_WarmUp.Visible = False;
+					}
+				}
+				
+				// Chrono
+				if (Net_StartTime > 0) {
+					Frame_Chrono.Visible = True;
+					declare netread Net_CurrentTime for LocalPlayer = -1;
+					if (Net_CurrentTime > 0 && LastStartTime == Net_StartTime) {
+						Label_Chrono.Value = TextLib::TimeToText(Net_CurrentTime, True);
+					} else {
+						Label_Chrono.Value = TextLib::TimeToText(ArenaNow - Net_StartTime, True);
+						if (Net_CurrentTime < 0) {
+							LastStartTime = Net_StartTime;
+						}
+					}
+				} else {
+					Frame_Chrono.Visible = False;
+				}
+				
+				// SpeedoMeter
+				if (Net_StartTime > 0) {
+					if (LastPositionTime + 100 > Now) continue;
+					Frame_SpeedoMeter.Visible = True;
+					if (LocalPlayer.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned) {
+						if (LocalPlayer.Position != <0., 0., 0.> && LastPosition != <0., 0., 0.>) {
+							declare Speed = (3600. * MathLib::Distance(LastPosition, LocalPlayer.Position)) / MathLib::ToReal(Now - LastPositionTime);
+							if (LastSpeed > 0) {
+								Label_Speed.Value = TextLib::Compose("%1 km/h", TextLib::ToText(Round((Speed + LastSpeed) / 2.)));
+							} else {
+								Label_Speed.Value = TextLib::Compose("%1 km/h", TextLib::ToText(Round(Speed)));
+							}
+							LastSpeed = Speed;
+						}
+						LastPosition = LocalPlayer.Position;
+						LastPositionTime = Now;
+						continue;
+					}
+					Label_Speed.Value = TextLib::Compose("%1 km/h", TextLib::ToText(Round(0.)));
+				} else {
+					Frame_SpeedoMeter.Visible = False;
+				}
+			}
+		}
+		--></script>
+		<frame id="Frame_WarmUp" posn="{{{C_RankingsListPosition.X+7.}}} {{{C_RankingsListPosition.Y+10.}}}" hidden="1">
+			<label id="Label_WarmUp" posn="1 0" textsize="2" textprefix="$o$fc0" halign="left" valign="center2"/>
+			<quad posn="0 0" sizen="{{{WarmUpFlagWidth*16.}}} {{{WarmUpFlagWidth*9.}}}"
+				style="BgRaceScore2" substyle="Warmup" halign="right" valign="center2"/>
+		</frame>
+		<frame id="Frame_Chrono" posn="{{{C_ChronoPosition.X}}} {{{C_ChronoPosition.Y}}}" hidden="1">
+			<label id="Label_Chrono" posn="0 -0.9 1" style="TextRaceChrono" halign="center" valign="center2"/>
+			<quad posn="0 0" sizen="40 10" style="BgsPlayerCard" substyle="BgPlayerCard" halign="center" valign="center2"/>
+		</frame>
+		<frame id="Frame_SpeedoMeter" posn="{{{C_SpeedoMeterPosition.X}}} {{{C_SpeedoMeterPosition.Y}}}" hidden="1">
+			<label id="Label_Speed" posn="15 -0.7" textsize="5" style="TextRaceChrono" halign="right" valign="center2"/>
+			<quad sizen="37 9" style="BgsPlayerCard" substyle="BgPlayerCard" halign="center" valign="center2"/>
+		</frame>""";
+}
+
+// Checks net variables of extras layer
+Void UpdateExtrasLayer() {
+	// Update chrono values
+	declare netwrite Integer Net_StartTime for Teams[0];
+	Net_StartTime = StartTime;
+	
+	if (StartTime < 0 || Now < StartTime) return;
+	
+	// Check for retirements
+	foreach (Player in Players) {
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI == Null) continue;
+		declare netread Net_RetireTime for UI = 0;
+		declare LastRetireTime for UI = 0;
+		if (LastRetireTime < Net_RetireTime && Net_RetireTime > StartTime) {
+			LastRetireTime = Net_RetireTime;
+			UnspawnPlayer(Player);
+			UIManager.UIAll.SendNotice(TextLib::Compose(_("$<%1$> retired!"), Player.Name),
+				CUIConfig::ENoticeLevel::PlayerInfo, Player.User, CUIConfig::EAvatarVariant::Default,
+				CUIConfig::EUISound::Silence, 0);
+		}
+	}
+}
+
+// Create manialink for rankings layer
+Text GetRankingsLayerManialink() {
+	if (C_RankingsListLength <= 0) return "";
+	declare Manialink = """<script><!--
+		#Include "TextLib" as TextLib
+		
+		#Const	C_PointsList	[""";
+	foreach (Index => RankPoints in G_PointsList) {
+		Manialink ^= ""^RankPoints;
+		if (Index < G_PointsList.count-1) {
+			Manialink ^= ",";
+		}
+	}
+	Manialink ^= """]
+		
+		main() {
+			wait(InputPlayer != Null);
+			
+			declare Label_RankingDisplay	<=> (Page.GetFirstChild("Label_RankingDisplay") as CMlLabel);
+			declare Frame_Ranking			<=> (Page.GetFirstChild("Frame_Ranking") as CMlFrame);
+			declare Label_Header			<=> (Frame_Ranking.GetFirstChild("Label_Header") as CMlLabel);
+			declare Quad_Header				<=> (Frame_Ranking.GetFirstChild("Quad_Header") as CMlQuad);
+			declare Quad_SelfHighlight		<=> (Frame_Ranking.GetFirstChild("Quad_SelfHighlight") as CMlQuad);
+			
+			declare RankingFrames = [""";
+	for (Index, 1, C_RankingsListLength) {
+		Manialink ^= """{{{Index}}} => (Frame_Ranking.GetFirstChild("Frame_Ranking{{{Index}}}") as CMlFrame)""";
+		if (Index < C_RankingsListLength) {
+			Manialink ^= ",";
+		}
+	}
+	Manialink ^= """];
+	
+			foreach (Rank => Frame in RankingFrames) {
+				declare Label_Rank		<=> (Frame.GetFirstChild("Label_Rank") as CMlLabel);
+				declare Label_Points	<=> (Frame.GetFirstChild("Label_Points") as CMlLabel);
+				Label_Rank.Value = TextLib::ToText(Rank);
+				if (C_PointsList.existskey(Rank - 1)) {
+					Label_Points.Value = TextLib::ToText(C_PointsList[Rank - 1]);
+				}
+			}
+			
+			declare LastUIUpdate = 0;
+			
+			declare Integer Sprint_RankingDisplayMode for LocalUser = 0;
+			declare LastRankingDisplayModeSwitch = -1;
+			
+			declare netread Net_CheckpointsCount for Teams[0] = 0;
+			declare netread Net_RemainingWarmUp for Teams[0] = "";
+			declare netread Net_CurrentCP for Teams[0] = 0;
+			
+			declare LastCP = -1;
+			declare LastPlayerTimesCount = -1;
+			
+			while (True) {
+				yield;
+				
+				foreach (Event in PendingEvents) {
+					switch (Event.Type) {
+						case CMlEvent::Type::KeyPress: {
+							switch (Event.KeyName) {
+								case "F3": {
+									// Toggle ranking display mode
+									if (Sprint_RankingDisplayMode < 2) {
+										Sprint_RankingDisplayMode += 1;
+									} else {
+										Sprint_RankingDisplayMode = 0;
+									}
+									LastRankingDisplayModeSwitch = Now;
+									switch (Sprint_RankingDisplayMode) {
+										case 0: {
+											Label_RankingDisplay.Value = TextLib::Compose("$afa%1", _("CP and Finish times shown!"));
+										}
+										case 1: {
+											Label_RankingDisplay.Value = TextLib::Compose("$fca%1", _("Only Finish times shown!"));
+										}
+										case 2: {
+											Label_RankingDisplay.Value = TextLib::Compose("$f99%1", _("Times list disabled!"));
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				
+				if (LastUIUpdate + 300 > Now) continue;
+				LastUIUpdate = Now;
+				
+				Label_RankingDisplay.Visible = (LastRankingDisplayModeSwitch >= 0 && LastRankingDisplayModeSwitch + 3000 > Now);
+				switch (Sprint_RankingDisplayMode) {
+					case 1: {
+						if (Net_CurrentCP != 0) {
+							// Finish-only mode, hide cp times
+							Frame_Ranking.Visible = False;
+							continue;
+						}
+					}
+					case 2: {
+						// Times display disabled
+						Frame_Ranking.Visible = False;
+						continue;
+					}
+				}
+				Frame_Ranking.Visible = True;
+				
+				declare Integer[Text] PlayersTimes;
+				
+				foreach (Player in Players) {
+					declare netread Net_CPTimes for Player = Integer[Integer];
+					if (Net_CPTimes.existskey(Net_CurrentCP) && Net_CPTimes[Net_CurrentCP] > 0) {
+						PlayersTimes[Player.Name] = Net_CPTimes[Net_CurrentCP];
+					}
+				}
+
+				if (LastCP == Net_CurrentCP && LastPlayerTimesCount == PlayersTimes.count) continue;
+				LastPlayerTimesCount = PlayersTimes.count;
+				LastCP = Net_CurrentCP;
+				
+				PlayersTimes = PlayersTimes.sort();
+				
+				Label_Header.Visible = (PlayersTimes.count > 0 && Net_CurrentCP >= 0);
+				if (Net_CurrentCP == 0) {
+					Label_Header.Value = _("Finish");
+					Quad_Header.Visible = True;
+				} else {
+					Label_Header.Value = TextLib::Compose("%1: %2/%3", _("|Checkpoint|CP"),
+						TextLib::ToText(Net_CurrentCP), TextLib::ToText(Net_CheckpointsCount));
+					Quad_Header.Visible = False;
+				}
+				Quad_SelfHighlight.Visible = PlayersTimes.existskey(InputPlayer.Name);
+				
+				declare Rank = 1;
+				foreach (Name => Time in PlayersTimes) {
+					if (!RankingFrames.existskey(Rank) || RankingFrames[Rank] == Null) continue;
+					
+					declare Frame			<=> RankingFrames[Rank];
+					declare Label_Name		<=> (Frame.GetFirstChild("Label_Name") as CMlLabel);
+					declare Label_Time		<=> (Frame.GetFirstChild("Label_Time") as CMlLabel);
+					declare Label_Points	<=> (Frame.GetFirstChild("Label_Points") as CMlLabel);
+					
+					Frame.Visible			= True;
+					Label_Name.Value		= Name;
+					Label_Time.Value		= TextLib::TimeToText(Time, True);
+					Label_Points.Visible	= (Net_RemainingWarmUp == "" && Net_CurrentCP == 0);
+					
+					if (Name == InputPlayer.Name) {
+						Quad_SelfHighlight.PosnY = (1. - Rank) * 3.5 - 5.;
+					}
+					
+					Rank += 1;
+				}
+				for (Index, Rank, {{{C_RankingsListLength}}}) {
+					if (!RankingFrames.existskey(Index)) continue;
+					RankingFrames[Index].Visible = False;
+				}
+			}
+		}
+		--></script>
+		<framemodel id="FrameModel_RankingFrame">
+			<format textsize="1"/>
+			<label id="Label_Rank" posn="0 0" sizen="3 0" textprefix="$o" halign="center" valign="center2"/>
+			<label id="Label_Name" posn="3 0" sizen="20 0" halign="left" valign="center2"/>
+			<label id="Label_Time" posn="25 0" sizen="10 0" halign="left" valign="center2"/>
+			<label id="Label_Points" posn="41 0" sizen="4 0" textprefix="$3f3+" halign="right" valign="center2"/>
+		</framemodel>
+		<label id="Label_RankingDisplay" posn="-100 60" style="TextTitle1" textsize="3" hidden="1" halign="left" valign="center2"/>
+		<frame id="Frame_Ranking" posn="{{{C_RankingsListPosition[0]}}} {{{C_RankingsListPosition[1]}}} -1">
+			<label id="Label_Header" posn="6 0" sizen="30 0" style="TextTitle1" textsize="1" translate="1" hidden="1" halign="left" valign="center2"/>
+			<quad id="Quad_Header" posn="-2 0.4" sizen="7 6" style="Icons64x64_1" substyle="Finish" hidden="1" halign="left" valign="center2"/>
+			<quad id="Quad_SelfHighlight" posn="-2.7 0" sizen="38.8 3.6" style="Icons128x128_1" substyle="ShareBlink" opacity="0.1"
+				hidden="1" halign="left" valign="center2"/>""";
+	for (Index, 1, C_RankingsListLength) {
+		Manialink ^= """<frameinstance modelid="FrameModel_RankingFrame" id="Frame_Ranking{{{Index}}}" hidden="1" posn="0 {{{-5+(1.-Index)*3.5}}}"/>""";
+	}
+	Manialink ^= """
+		</frame>""";
+	return Manialink;
+}

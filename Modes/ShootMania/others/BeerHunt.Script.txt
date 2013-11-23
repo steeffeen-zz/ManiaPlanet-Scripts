@@ -1,0 +1,928 @@
+/* -------------------------------------- */
+//	BeerHunt written by steeffeen
+/* -------------------------------------- */
+
+#RequireContext CSmMode
+
+#Include "MathLib" as MathLib
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Mode.Script.txt" as Mode
+#Include "Libs/Nadeo/Layers.Script.txt" as Layers
+#Include "Libs/Nadeo/Top.Script.txt" as Top
+#Include "Libs/Nadeo/Json.Script.txt" as Json
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+#Include "Libs/Nadeo/ShootMania/Rules.Script.txt" as Rules
+#Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
+
+#Const	CompatibleMapTypes	"RoyalArena"
+#Const	Version				"2013-01-29"
+
+/* -------------------------------------- */
+// Settings
+/* -------------------------------------- */
+#Setting S_TimeLimit				300 	as _("Time limit")					///< Time limit on a map
+#Setting S_BasePointLimit			70		as _("Base point limit (dynamic)")	///< Base point limit (dynamic! dependent on players count)
+#Setting S_PassingPossible			True	as _("Allow passing mode")			///< Boolean if beer players are allowed to switch to passing mode
+
+/* -------------------------------------- */
+// Constants
+/* -------------------------------------- */
+#Const C_UITickInterval					200		///< Time interval between UI update
+
+#Const C_BeerPointsTickInterval			7		///< Interval of the beer points ticks
+#Const C_BeerPlayerHitAward				2		///< Points granted the player who hits the beer carrier
+#Const C_BeerPickupAward				2		///< Points granted to the player who picks up a dropped beer
+#Const C_PlayerMaxArmor					200		///< Max health of normal players
+#Const C_BeerPlayerMaxArmor				300		///< Max health of beer carrier
+#Const C_BeerPickupRange				2.1		///< Range within the beer can be picked up
+#Const C_PlayerAmmoGain					1.0		///< Default ammo gain rate
+#Const C_PlayerRespawnTime				3		///< After this duration players will be respawned
+#Const C_BeerDropResetTime				7		///< After this duration the beer will be resetted if it's dropped
+#Const C_FunPointsFactor				1		///< Factor with which the points are multiplicated (for fun)
+#Const C_VictoryMessageGap				6		///< Points gap for the -near to victory- messages
+#Const C_LogEnabled						False	///< Enable/Disable logging
+#Const C_MinimumPlayerNb				10		///< Bots will be added up to the given number at the start of a map
+
+#Const C_TopNameBeer					_("Beer")
+#Const C_TopNameDamages					_("Damages")
+
+/* -------------------------------------- */
+// Globale variables
+/* -------------------------------------- */
+declare Ident[]	G_SpawnsList;		///< Id of all the BlockSpawns of the map
+declare Ident	G_LatestSpawnId;	///< Id of the last BlockSpawn used
+
+/* -------------------------------------- */
+//	Mode variables
+/* -------------------------------------- */
+declare Ident M_BeerIdent;					// Id of the player who has the beer
+declare Vec3 M_BeerPosi;					// Position of dropped beer
+declare Vec3 M_BeerPosiSpawn;				// Default beer position (pole)
+declare Integer M_LastBeerPointsTick;		// Time when the last deer points tick happened
+declare Text M_BeerMarkerSpawn;				// Marker for the beer spawn
+declare Integer M_LastBigMsgClear;			// When big ui messages were cleared the last time
+declare Integer M_BeerDropTime;				// Time when the beer was dropped (for reset)
+declare Integer M_PointLimit;				// Dynamic point limit
+declare Integer M_SecondsUntilNextBeerTick;	// Seconds until the next beer tick kicks in
+
+/* -------------------------------------- */
+// Functions
+/* -------------------------------------- */
+
+/* -------------------------------------- */
+/// Fill the SpawnsList with all the BlockSpawns of the map
+Void FillSpawnsList() {
+	foreach (BlockSpawn in BlockSpawns) {
+		G_SpawnsList.add(BlockSpawn.Id);
+	}
+}
+
+/* -------------------------------------- */
+/// Generates BeerPlayerArmorRegInterval dependent on passed PlayersCount
+Integer GetBeerPlayerArmorRegInterval(Integer PlayersCount) {
+	declare BeerPlayerArmorRegInterval = 2500 - (PlayersCount - 2) * 100;
+	if (BeerPlayerArmorRegInterval < 1200) {
+		BeerPlayerArmorRegInterval = 1200;
+	}
+	return BeerPlayerArmorRegInterval;
+}
+
+/* -------------------------------------- */
+/// Generates BeerPlayerAmmoGain dependent on passed PlayersCount
+Real GetBeerPlayerAmmoGain(Integer PlayersCount) {
+	declare BeerPlayerAmmoGain = 1.5 + (PlayersCount - 2) * 0.1875;
+	if (BeerPlayerAmmoGain > 3.0) {
+		BeerPlayerAmmoGain = 3.0;
+	}
+	return BeerPlayerAmmoGain;
+}
+
+/* -------------------------------------- */
+/// Generates BeerTickPoints dependent on passed PlayersCount
+Integer GetBeerTickPoints(Integer PlayersCount) {
+	declare BeerTickPoints = 2 + (PlayersCount - 5) / 3;
+	if (BeerTickPoints < 2) {
+		BeerTickPoints = 2;
+	}
+	return BeerTickPoints;
+}
+
+/* -------------------------------------- */
+/// Actions if someone loses the beer
+Void LoseBeer(Ident Id, Boolean Message) {
+	if (Players.existskey(Id)) {
+		declare formerBeerPlayer <=> Players[Id];
+		
+		M_BeerIdent = NullId;
+		M_BeerPosi = formerBeerPlayer.Position;
+		
+		formerBeerPlayer.AmmoGain = C_PlayerAmmoGain;
+		formerBeerPlayer.ArmorMax = C_PlayerMaxArmor;
+		
+		declare UI <=> UIManager.GetUI(formerBeerPlayer);
+		if (UI != Null) {
+			UI.ManialinkPage = "";
+		}
+		
+		if (Message) {
+			UIManager.UIAll.SendNotice(
+					TextLib::Compose(_("$<%1$>$z dropped the beer!"), formerBeerPlayer.Name), 
+					CUIConfig::ENoticeLevel::PlayerInfo, 
+					Null, CUIConfig::EAvatarVariant::Default, 
+					CUIConfig::EUISound::Silence, 0
+				);
+			M_LastBigMsgClear = Now;
+			UIManager.UIAll.BigMessage = """$<{{{formerBeerPlayer.Name}}}$>$z $sdropped the beer!""";
+		}
+		M_BeerDropTime = Now;
+		
+		UIManager.UIAll.Hud3dMarkers = """<marker label="$3F0$wBEER" pos="{{{M_BeerPosi[0]}}} {{{M_BeerPosi[1]}}} {{{M_BeerPosi[2]}}}" />""";
+		
+		if (C_LogEnabled) log("""drop: '{{{formerBeerPlayer.Login}}}'""");
+	}
+}
+
+Void LoseBeer(Ident Id) {
+	LoseBeer(Id, True);
+}
+
+/* -------------------------------------- */
+/// Message and actions if someone gets the beer
+Void GetBeer(Ident Id) {
+	declare Pass = False;
+	declare OldBeerCarrierId = NullId;
+	if (M_BeerIdent != NullId) {
+		Pass = True;
+		OldBeerCarrierId = M_BeerIdent;
+		LoseBeer(M_BeerIdent, False);
+	}
+
+	if (Players.existskey(Id)) {
+		declare beerPlayer <=> Players[Id];
+		
+		if (!Pass) {
+			// Player picked up beer -> Bonus points
+			Score::AddPoints(beerPlayer, C_BeerPickupAward * C_FunPointsFactor);
+		}
+		
+		M_BeerIdent = Id;
+		beerPlayer.AmmoGain = GetBeerPlayerAmmoGain(Players.count);
+		beerPlayer.ArmorMax = C_BeerPlayerMaxArmor;
+		beerPlayer.Armor += 100;
+		M_LastBeerPointsTick = Now;
+		
+		UIManager.UIAll.SendNotice(
+					"""$<{{{beerPlayer.Name}}}$>$z got the beer!""",
+					CUIConfig::ENoticeLevel::PlayerInfo, 
+					Null, CUIConfig::EAvatarVariant::Default, 
+					CUIConfig::EUISound::Silence, 0
+			);
+		M_LastBigMsgClear = Now;
+		UIManager.UIAll.BigMessage = """$<{{{beerPlayer.Name}}}$>$z $sgot the beer!""";
+		
+		if (beerPlayer.IsFakePlayer) {
+			// Bots have the same Login -> Can't be used for the marker
+			UIManager.UIAll.Hud3dMarkers = """<marker label="$F00$wBEER" pos="{{{beerPlayer.Position[0]}}} {{{beerPlayer.Position[1]}}} {{{beerPlayer.Position[2]}}}" />""";
+		} else {
+			// Mark Player with a BEER marker
+			UIManager.UIAll.Hud3dMarkers = """<marker label="$F00$wBEER" playerlogin={{{beerPlayer.Login}}} />""";
+		}
+		
+		if (C_LogEnabled) {
+			if (Pass && Players.existskey(OldBeerCarrierId)) {
+				log("""pass: '{{{Players[OldBeerCarrierId].Login}}}' to '{{{beerPlayer.Login}}}'""");
+			} else {
+				log("""pickup: '{{{beerPlayer.Login}}}'""");
+			}
+		}
+	}
+}
+
+/* -------------------------------------- */
+/// Play sound and notice if the given player is close to win
+Void VictoryMessage(Ident Id) {
+	if (Players.existskey(Id)) {
+		declare Player <=> Players[Id];
+		if (Player.Score != Null) {
+		declare Gap = M_PointLimit * C_FunPointsFactor - Player.Score.RoundPoints;
+		if (Gap <= 0) {
+			UIManager.UIAll.SendNotice(
+				"""$<{{{Player.Name}}}$>$z gets the final point!""",
+				CUIConfig::ENoticeLevel::PlayerInfo, 
+				Null, CUIConfig::EAvatarVariant::Default, 
+				CUIConfig::EUISound::VictoryPoint, 0
+			);
+		} else {
+			if (Gap <= C_VictoryMessageGap * C_FunPointsFactor) {
+				declare Variant = C_VictoryMessageGap * C_FunPointsFactor - Gap;
+				declare Msg = """$<{{{Player.Name}}}$>$z is {{{TextLib::ToText(Gap)}}} point""";
+				if (Gap > 1) {
+					Msg ^= """s""";
+				}
+				Msg ^= """ from victory!""";
+				UIManager.UIAll.SendNotice(
+					Msg, 
+					CUIConfig::ENoticeLevel::PlayerInfo, 
+					Null, CUIConfig::EAvatarVariant::Default, 
+					CUIConfig::EUISound::TieBreakPoint, Variant
+				);
+			}
+		}
+		}
+	}
+}
+
+/* -------------------------------------- */
+/// An interval tick granting the beer carrier points
+Void BeerPointsTick(Ident Id) {
+	if (M_BeerIdent != NullId && Players.existskey(M_BeerIdent)) {
+		declare beerPlayer <=> Players[M_BeerIdent];
+		declare PointsAward = GetBeerTickPoints(Players.count) * C_FunPointsFactor;
+		Score::AddPoints(beerPlayer, PointsAward);
+		Top::IncrementPlayerPoints(C_TopNameBeer, beerPlayer, PointsAward);
+		M_LastBeerPointsTick = Now;
+		
+		UIManager.UIAll.SendNotice(
+				"""$<{{{beerPlayer.Name}}}$>$z got {{{PointsAward}}} points for drinking beer!""",
+				CUIConfig::ENoticeLevel::PlayerInfo, 
+				Null, CUIConfig::EAvatarVariant::Default, 
+				CUIConfig::EUISound::Silence, 0
+			);
+		
+		M_LastBigMsgClear = Now;
+		UIManager.UIAll.BigMessageSound = CUIConfig::EUISound::Silence;
+		UIManager.UIAll.BigMessage = """$<{{{beerPlayer.Name}}}$>$z $sgot {{{TextLib::ToText(PointsAward)}}} points for drinking beer!""";
+		
+		VictoryMessage(Id);
+		
+		if (C_LogEnabled) log("""tick: '{{{beerPlayer.Login}}}'""");
+	}
+}
+
+/* -------------------------------------- */
+/// Resetting the beer (to the pole)
+Void ResetBeer(Boolean Message) {
+	// If someone had the beer -> Make him lose it
+	if (M_BeerIdent == NullId || Message) {
+		M_LastBigMsgClear = Now;
+		UIManager.UIAll.BigMessage = ("$z$sBeer has been reset!");
+	}
+	
+	if (M_BeerIdent != NullId) {
+		foreach (Player in Players) {
+			if (M_BeerIdent == Player.Id) {
+				LoseBeer(Player.Id);
+				break;
+			}
+		}
+		M_BeerIdent = NullId;
+	}
+	
+	M_BeerPosi = M_BeerPosiSpawn;
+	UIManager.UIAll.Hud3dMarkers = M_BeerMarkerSpawn;
+	
+	if (C_LogEnabled) log("beer reset");
+}
+
+Void ResetBeer() {
+	ResetBeer(False);
+}
+
+/* -------------------------------------- */
+/// Generating ManialinkPage for passing mode
+Text PassingModeManialinkPage(Ident Id) {
+	if (Players.existskey(Id)) {
+		declare PassingMode for Players[Id] = False;
+		if (PassingMode) {
+			if (M_BeerIdent != NullId && M_BeerIdent == Id) {
+				return	"""
+						<label posn="0 7" halign="center" scale="2" text="〝     〞" style="TextCardSmallScores1" />
+						<label posn="0 -8" halign="center" scale="1" text="Passing" style="TextCardSmallScores2" />
+						""";
+			} else {
+				return	"""
+						<label posn="0 7" halign="center" scale="1" text="〝     〞" style="TextCardSmallScores1"/>
+						""";
+			}
+		}
+	}
+	return "";
+}
+
+/* -------------------------------------- */
+/// Calculates the remaining seconds for the dropped beer
+Integer GetRemainingDroppedBeerSeconds() {
+	if (M_BeerIdent == NullId) {
+		return C_BeerDropResetTime - (Now - M_BeerDropTime) / 1000;
+	}
+	
+	return -1;
+}
+
+/* -------------------------------------- */
+/// Beer carrier frame
+Text BeerCarrierFrame() {
+	
+	declare BeerCarrierName = "@Spawn";
+	if (M_BeerIdent == NullId) {
+		if (M_BeerPosi != M_BeerPosiSpawn) {
+			BeerCarrierName = """Dropped ({{{GetRemainingDroppedBeerSeconds()}}})""";
+		}
+	} else {
+		if (Players.existskey(M_BeerIdent)) {
+			if (M_SecondsUntilNextBeerTick > 0) {
+				BeerCarrierName = """$<{{{Players[M_BeerIdent].Name}}}$> ({{{M_SecondsUntilNextBeerTick}}})""";
+			} else {
+				BeerCarrierName = """{{{Players[M_BeerIdent].Name}}}""";
+			}
+		} else {
+			BeerCarrierName = "";
+		}	
+	}
+	
+	return """
+			<frame posn="110 -65">
+				<label posn="0 0" halign="center" valign="center" text="$000{{{BeerCarrierName}}}" />
+				<quad posn="0 -1 0" sizen="60 8" halign="center" valign="center" style="Bgs1InRace" substyle="BgWindow2" />
+			</frame>
+			""";
+}
+
+/* ------------------------------------- */
+/** Spawn a player
+ *
+ * @param	_Player		The player to spawn
+ */
+Void SpawnPlayers(CSmPlayer _Player) {
+	if (G_SpawnsList.count == 0) FillSpawnsList();
+	declare SpawnId = NullId;
+	while (True) {
+		SpawnId = G_SpawnsList[MathLib::Rand(0, G_SpawnsList.count - 1)];
+		if (SpawnId != G_LatestSpawnId) break;
+		if (G_SpawnsList.count == 1) break;
+	}
+	if (_Player.AmmoGain != C_PlayerAmmoGain) {
+		_Player.AmmoGain = C_PlayerAmmoGain;
+	}
+	if (_Player.ArmorMax != C_PlayerMaxArmor) {
+		_Player.ArmorMax = C_PlayerMaxArmor;
+	}
+	SM::SpawnPlayer(_Player, 0, BlockSpawns[SpawnId], Now + C_PlayerRespawnTime * 1000);
+	G_LatestSpawnId = SpawnId;
+	declare Tmp = G_SpawnsList.remove(SpawnId);
+}
+
+/* ------------------------------------- */
+/** Create the Scores table manialink
+ *
+ *	@return		The ManiaLink string
+ */
+Text CreateLayerScoresTable() {
+	return
+		"""
+		<frame posn="0 -47">
+			<quad posn="0 0 1" sizen="40 8" style="Bgs1InRace" halign="center" substyle="BgList"/>
+			<label posn="0 -2 2" sizen="40 8" halign="center" text="{{{_("Point limit")}}}: {{{M_PointLimit * C_FunPointsFactor}}}" />
+		</frame>
+		""";
+}
+
+/* ------------------------------------- */
+/** Update the Scores in Spawn manialink
+ *
+ *	@return		The manialink string
+ */
+Text UpdateLayerScoresInSpawn() {
+	declare Top3 = "";
+	declare I = 0;
+	declare Icons = ["First", "Second", "Third"];
+	
+	foreach (Score in Scores) {
+		declare Pseudo = TextLib::MLEncode(Score.User.Name);
+		
+		Top3 ^=	"""
+				<frame posn="-140 {{{ I * -30 }}} -25">
+					<quad posn="0 -2" sizen="30 30" valign="center" style="Icons64x64_1" substyle="{{{ Icons[I] }}}" />
+					<label posn="30 0" sizen="200 20" textsize="15" valign="center" text="{{{ Pseudo }}}" />
+					<label posn="270 0" sizen="20 20" textsize="15" halign="right" valign="center" text="{{{ Score.RoundPoints }}}" />
+				</frame>
+				""";
+		I += 1;
+		if (I >= 3) break;
+	}
+	
+	return	"""
+			<frame posn="0 85 -20">
+				<frame posn="0 -65">
+					<quad posn="0 15 -30" sizen="290 92" halign="center" bgcolor="222c" />
+					{{{ Top3 }}}
+				</frame>
+			</frame>
+			""";
+}
+
+/* ------------------------------------- */
+/** Create the Info manialink
+ *
+ *	@return		The ManiaLink string
+ */
+Text CreateLayerInfo() {
+	return
+"""<script><!--
+	main() {
+		declare Label_PosTotal <=> (Page.GetFirstChild("PosTotal") as CMlLabel);
+		declare Label_PosCurrent <=> (Page.GetFirstChild("PosCurrent") as CMlLabel);
+		declare netread Net_LayerInfoUpdated for UI = 0;
+		declare netread Net_PosTotal for UI = 0;
+		declare netread Net_PosCurrent for UI = 0;
+		declare LayerInfoUpdated = 0;
+		declare LastUpdate = 0;
+		
+		while(True) {
+			yield;
+			
+			// Process events
+			
+			// Check for passing mode
+			declare netwrite Net_BeerPassing for UI = 0;
+			// Values: 1 - Enable, 2 - Disable
+			
+			foreach (Event in PendingEvents) {
+				switch (Event.Type) {
+					case CMlEvent::Type::KeyPress: {
+						if (Event.CharPressed == "2555904") {
+								// F3 Pressed
+								Net_BeerPassing = 1;
+						} else {
+							if (Event.CharPressed == "2621440") {
+								// F4 Pressed
+								Net_BeerPassing = 2;
+							}
+						}
+					}
+				}
+			}
+			
+			// UI update
+			if (LastUpdate + 500 > Now) continue;
+			LastUpdate = Now;
+			
+			if (LayerInfoUpdated == Net_LayerInfoUpdated) continue;
+			LayerInfoUpdated = Net_LayerInfoUpdated;
+			
+			declare PosCurrentString = "";
+			if (Net_PosTotal <= 0) PosCurrentString = "-";
+			else PosCurrentString = ""^Net_PosCurrent;
+			
+			Label_PosTotal.SetText("/"^Net_PosTotal);
+		}
+	}
+--></script>
+<frame posn="150 -88">
+	<label posn="0 1" halign="left" valign="bottom" id="PosTotal" />
+	<label posn="0 0" halign="right" valign="bottom" style="TextRaceChrono" id="PosCurrent" />
+</frame>
+""";
+}
+
+/* ------------------------------------- */
+/** Update the Info manialink
+ *
+ *	@param	_Player		The player to update
+ */
+Void UpdateLayerInfo(CSmPlayer _Player) {
+	if (_Player.Score != Null) {
+		declare UI <=> UIManager.GetUI(_Player);
+		if (UI != Null) {
+			declare netwrite Net_LayerInfoUpdated for UI = 0;
+			declare netwrite Net_PosTotal for UI = 0;
+			declare netwrite Net_PosCurrent for UI = 0;
+			Net_LayerInfoUpdated = Now;
+			Net_PosTotal = Scores.count;
+			Net_PosCurrent = Scores.keyof(_Player.Score) + 1;
+		}
+	}
+}
+
+/* ------------------------------------- */
+// Main
+/* ------------------------------------- */
+main() {
+	/* -------------------------------------- */
+	// Set mode options
+	UseClans = False;
+	Top::AddTop(C_TopNameBeer, 5);
+	Top::AddTop(C_TopNameDamages, 5);
+	
+	/* -------------------------------------- */
+	// Create the rules
+	declare ModeName = "BeerHunt";
+	declare ModeRules = """- Everybody is a drinker and wants to get the beer!
+- If you have the beer you can't hit others, but your health is regenerated and you get points for having the beer.
+- The winner of the match is the player who reaches the points limit first or who has the most points when time runs out.
+
+- Passing Mode: You can activate the pass mode with F3 (deactivate it with F4), in pass mode any hit will pass the beer to the victim.""";
+	Rules::Create(ModeName, ModeRules);
+
+	/* -------------------------------------- */
+	// Create the UI layers
+	declare LayerAttached	= False;
+	declare LayerDetached	= False;
+	declare LayerUpdated	= False;
+	declare LayerDestroyed	= False;
+	// UI All
+	declare LayerScoresTableId		= Layers::Create("ScoresTable");
+	declare LayerScoresInSpawnId	= Layers::Create("ScoresInSpawn");
+	declare TopsLayer				<=> UIManager.UILayerCreate();
+	declare BeerCarrierLayer		<=> UIManager.UILayerCreate();
+	// UI Players
+	declare LayerInfoId				= Layers::Create("Info");
+	
+	Layers::GetFromId(LayerScoresTableId).Type = CUILayer::EUILayerType::ScoresTable;
+	Layers::GetFromId(LayerScoresInSpawnId).Type = CUILayer::EUILayerType::ScreenIn3d;
+	
+	while (!ServerShutdownRequested) {
+/* ------------------------------------- */
+// Map/Round begin
+/* ------------------------------------- */
+		Mode::LoadMap();	
+		
+		// Add bots
+		declare BotPlayersNb = C_MinimumPlayerNb - PlayersNbTotal;
+		if (BotPlayersNb > 0) {
+			if (C_LogEnabled) log("""add {{{BotPlayersNb}}} bots""");
+			SetNbFakePlayers(BotPlayersNb, 0);
+		}
+		
+		// Start sequence
+		G_SpawnsList.clear();
+		G_LatestSpawnId = NullId;
+		
+		Top::MatchBegin();
+		Top::RoundBegin();
+		Score::MatchBegin();
+		Score::RoundBegin();
+		
+		MatchEndRequested = False;
+		
+		UIManager.ResetAll();
+		SM::SetupDefaultVisibility();
+		Rules::Attach();
+		
+		LayerUpdated = Layers::Update("ScoresTable", CreateLayerScoresTable());
+		LayerUpdated = Layers::Update("ScoresInSpawn", UpdateLayerScoresInSpawn());
+		LayerAttached = Layers::Attach("ScoresTable", NullId);
+		LayerAttached = Layers::Attach("ScoresInSpawn", NullId);
+		
+		UIManager.UIAll.UISequence = CUIConfig::EUISequence::Intro;
+		UIManager.UIAll.BigMessageSound = CUIConfig::EUISound::StartRound;
+		UIManager.UIAll.BigMessageSoundVariant = 0;
+		UIManager.UIAll.BigMessage = _("New match");
+		wait(UIManager.UIAll.UISequenceIsCompleted);
+		UIManager.UIAll.BigMessage = "";
+		UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+		
+		// Dynamic point limit
+		M_PointLimit = S_BasePointLimit + ((Players.count - 6) / 2) * 5;
+		if (M_PointLimit < S_BasePointLimit) {
+			M_PointLimit = S_BasePointLimit;
+		}
+		
+		// Setting the BeerSpawn
+		M_BeerIdent = NullId;
+		assert(BlockPoles.count > 0);
+		declare Pole <=> BlockPoles[0];
+		M_BeerPosi = Pole.Position;
+		M_BeerPosiSpawn = M_BeerPosi;
+		M_BeerMarkerSpawn = """<marker label="$0F0$wBEER" pos="{{{M_BeerPosi[0]}}} {{{M_BeerPosi[1]}}} {{{M_BeerPosi[2]}}}" />""";
+		UIManager.UIAll.Hud3dMarkers = M_BeerMarkerSpawn;
+		
+		// UI
+		M_LastBigMsgClear = Now;
+		declare M_LastBeerHealthReg = 0;
+		declare LastUITick = 0;
+		declare PrevPosTotal = 0;
+		StartTime = Now;
+		EndTime = StartTime + (S_TimeLimit * 1000);
+		
+		UIManager.UIAll.UILayers.add(TopsLayer);
+		UIManager.UIAll.UILayers.add(BeerCarrierLayer);
+		
+		if (C_LogEnabled) log("start match");
+		
+		while (!MatchEndRequested && !ServerShutdownRequested) {
+/* ------------------------------------- */
+// Play loop
+/* ------------------------------------- */
+			yield;
+			
+			/* -------------------------------------- */
+			//	Check if the beer carrier left the game
+			if (M_BeerIdent != NullId) {
+				if (!Players.existskey(M_BeerIdent)) {
+					if (C_LogEnabled) log("""beer player left the game""");
+					ResetBeer(True);
+				}
+			} else {
+				if (M_BeerPosi != M_BeerPosiSpawn) {
+					// Beer is dropped
+					if (Now > M_BeerDropTime + C_BeerDropResetTime * 1000) {
+						// Dropped for too long: Reset!
+						ResetBeer(True);
+					} else {
+						// Reset timer ticks down
+						UIManager.UIAll.Hud3dMarkers = """<marker label="$3F0$wBEER ({{{GetRemainingDroppedBeerSeconds()}}})" pos="{{{M_BeerPosi[0]}}} {{{M_BeerPosi[1]}}} {{{M_BeerPosi[2]}}}" />""";
+					}
+				}
+			}
+			
+			/* -------------------------------------- */
+			//	Handle events
+			foreach (Event, PendingEvents) {
+				switch (Event.Type) {
+					case CSmModeEvent::EType::OnArmorEmpty: {
+						if (Event.Shooter == Event.Victim || Event.Shooter == Null) {
+							Score::RemovePoints(Event.Victim, C_FunPointsFactor);
+						}
+						PassOn(Event);
+					}
+					case CSmModeEvent::EType::OnHit: {
+						if (Event.Shooter == Event.Victim || Event.Shooter == Null || Event.Victim == Null) {
+							Discard(Event);
+						} else {
+							if (M_BeerIdent != NullId && Event.Shooter == Players[M_BeerIdent]) {
+								// The beer carrier shoots, but does 0 damage
+								Event.Damage = 0;
+								// If beer passing mode is enabled -> Pass the ball
+								if (S_PassingPossible) {
+									declare PassingMode for Event.Shooter = False;
+									if (PassingMode) {
+										GetBeer(Event.Victim.Id);
+									}
+								}
+							} else {
+								// Hits of normal players
+								declare Points = Event.Damage / 100;
+								if (M_BeerIdent != NullId && Event.Victim == Players[M_BeerIdent]) {
+									Points *= C_BeerPlayerHitAward;
+									if (Event.Victim.Armor < 200) {
+										Event.Damage = 200;
+									}
+								}
+								
+								Points *= C_FunPointsFactor;
+								Score::AddPoints(Event.Shooter, Points);
+								Top::IncrementPlayerPoints(C_TopNameDamages, Event.Shooter, Points);
+								Event.ShooterPoints = Points;
+								
+								VictoryMessage(Event.Shooter.Id);
+								
+								PassOn(Event);
+							}
+						}
+					}
+					case CSmModeEvent::EType::OnPlayerRequestRespawn: {
+						declare minusPoints = 1;
+						if (M_BeerIdent != NullId && Event.Player == Players[M_BeerIdent]) {
+							// Beer carrier requests respawn -> Reset beer
+							minusPoints = C_BeerPlayerHitAward;
+							log("""beer player requests respawn: '{{{Event.Player.Login}}}'""");
+							LoseBeer(Event.Player.Id, False);
+						}
+						Score::RemovePoints(Event.Player, minusPoints * C_FunPointsFactor);
+						PassOn(Event);
+					}
+					default: {
+						PassOn(Event);
+					}
+				}
+			}	
+			
+			/* -------------------------------------- */
+			// Actions with players every tick
+			foreach (Player in Players) {
+				if (Player.IsFakePlayer) {
+					/*
+					log("1:"^Player.BotAgressivity);
+					log("2:"^Player.BotAgressivityDoublingTime);
+					log("3:"^Player.BotPathOffset);
+					log("4:"^Player.BotPathSpeedCoef);
+					*/
+					/*
+					Player.BotAgressivity = 110.5;				// 0.666
+					Player.BotAgressivityDoublingTime = 100;	// 0
+					Player.BotPathOffset = 110;					// 0.0
+					Player.BotPathSpeedCoef = 100.0;			// 1.0
+					*/
+				}
+				if (Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned && !Player.RequestsSpectate) {
+					if (M_BeerIdent != NullId && Player.Id == M_BeerIdent) {
+						LoseBeer(Player.Id);
+					}
+					SpawnPlayers(Player);
+				} else {
+					if (Player.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned) {
+						if (M_BeerIdent == NullId) {
+							// Check if someone gets the beer by standing near to its position
+							if (Player.Armor > 0) {
+								if (MathLib::Distance(Player.Position, M_BeerPosi) <= C_BeerPickupRange) {
+									GetBeer(Player.Id);
+								}
+							}
+						} else {
+							// Check if it's the beer carrier
+							if (Player.Id == M_BeerIdent) {
+								// Beer regenerates armor
+								if (Now >= M_LastBeerHealthReg + GetBeerPlayerArmorRegInterval(Players.count)) {
+									Player.Armor += 1;
+									M_LastBeerHealthReg = Now;
+								}
+								// Beer marker for bots has to be updated manually
+								if (Player.IsFakePlayer) {
+									UIManager.UIAll.Hud3dMarkers = """<marker label="$F00$wBEER" pos="{{{Player.Position[0]}}} {{{Player.Position[1]}}} {{{Player.Position[2]}}}" />""";
+								}
+								// Beer points ticks
+								M_SecondsUntilNextBeerTick = (M_LastBeerPointsTick + C_BeerPointsTickInterval * 1000 - Now) / 1000;
+								if (M_SecondsUntilNextBeerTick <= 0) {
+									BeerPointsTick(Player.Id);
+								}
+							} else {
+								if (Player.Armor > 100 && Player.Armor < 200) {
+									// Former beers armor is reset (should never be the case but just in case..)
+									Player.Armor = 100;
+								}
+							}
+						}
+					}
+				}
+				
+				if (S_PassingPossible) {
+					// Players can enable and disable beer passing
+					declare UI <=> UIManager.GetUI(Player);
+					if (UI != Null) {
+						declare netread Net_BeerPassing for UI = 0;
+						declare PassingMode for Player = False;
+						switch (Net_BeerPassing) {
+							case 1: {
+								// Enable passing
+								PassingMode = True;
+							}
+							case 2: {
+								// Disable passing
+								PassingMode = False;
+							}
+						}
+						// Update crosshair design
+						UI.ManialinkPage = PassingModeManialinkPage(Player.Id);
+					}
+				} else {
+					UIManager.UIAll.ManialinkPage = "";
+				}
+			}
+			
+			/* -------------------------------------- */
+			// Clear big UI messages
+			if (Now - M_LastBigMsgClear > 2200) {
+				UIManager.UIAll.BigMessage = ("");
+				M_LastBigMsgClear = Now;
+			}
+			
+			
+			/* -------------------------------------- */
+			// Update UI
+			if (LastUITick + C_UITickInterval < Now) {
+				declare ScoresTableUpdated = False;
+				declare PosTotalUpdated = False;
+				if (PrevPosTotal != Scores.count) {
+					PrevPosTotal = Scores.count;
+					PosTotalUpdated = True;
+				}
+				foreach (Player in Players) {
+					if (Layers::IsMissing("Info", Player.Id)) {
+						LayerAttached = Layers::Attach("Info", Player.Id);
+						LayerUpdated = Layers::Update("Info", CreateLayerInfo());
+						PosTotalUpdated = True;
+					}
+					
+					declare PosCurrentUpdated = False;
+					declare PrevPosCurrent for Player = 0;
+					declare PrevRoundPoints for Player = 0;
+					if (PrevPosCurrent != Scores.keyof(Player.Score) + 1) {
+						PrevPosCurrent = Scores.keyof(Player.Score) + 1;
+						PosCurrentUpdated = True;
+					}
+					if (!ScoresTableUpdated && Player.Score != Null && PrevRoundPoints != Player.Score.RoundPoints) {
+						PrevRoundPoints = Player.Score.RoundPoints;
+						ScoresTableUpdated = True;
+					}
+					
+					if (PosTotalUpdated || PosCurrentUpdated) {
+						UpdateLayerInfo(Player);
+					}
+				}
+				if (ScoresTableUpdated) {
+					LayerUpdated = Layers::Update("ScoresInSpawn", UpdateLayerScoresInSpawn());
+				}
+				LastUITick = Now;
+				
+				if (((Now - StartTime) / 8000) % 2 == 0) {
+					TopsLayer.ManialinkPage = Top::GetFrameTop(C_TopNameBeer, _("Top 5 Beer Drinking"), "130 -30", "");
+				} else { 
+					TopsLayer.ManialinkPage = Top::GetFrameTop(C_TopNameDamages, _("Top 5 Damages"), "130 -30", "");
+				}
+				BeerCarrierLayer.ManialinkPage = BeerCarrierFrame();
+			}
+			
+			/* -------------------------------------- */
+			// Victory conditions
+			declare IsMatchOver = False;
+			if (Now > StartTime + S_TimeLimit * 1000) {
+				IsMatchOver = True;
+			}
+			foreach (Player in Players) {
+				if (Player.Score != Null && Player.Score.RoundPoints >= M_PointLimit * C_FunPointsFactor) {
+					IsMatchOver = True;
+				}
+			}
+			
+			if (IsMatchOver) {
+				break;
+			}
+		}
+		
+/* ------------------------------------- */
+// Map/Round end
+/* ------------------------------------- */
+		if (C_LogEnabled) log("end match");
+		
+		// Hide passing mode crosshair extension
+		UIManager.UIAll.ManialinkPage = "";
+		
+		// Hide beer marker
+		UIManager.UIAll.Hud3dMarkers = "";
+		
+		// Hide beer carrier frame
+		BeerCarrierLayer.ManialinkPage = "";
+		
+		// Show both top lists
+		TopsLayer.ManialinkPage =	Top::GetFrameTop(C_TopNameBeer, _("Top 5 Beer Drinking"), "130 40", "")
+									^
+									Top::GetFrameTop(C_TopNameDamages, _("Top 5 Damages"), "130 -10", "");
+		
+		// End scores + tops
+		Score::RoundEnd();		
+		Top::RoundEnd();
+		Score::MatchEnd(True);
+		Top::MatchEnd();
+		
+		/* -------------------------------------- */
+		// End match sequence
+		if (EndTime > Now) {
+			EndTime = Now;
+		}
+		declare CUser Winner <=> Null;
+		declare MaxPoints = 0;
+		foreach (Score in Scores) {
+			if (Score.Points > MaxPoints) {
+				MaxPoints = Score.Points;
+				Winner <=> Score.User;
+			} else if (Score.Points == MaxPoints) {
+				Winner <=> Null;
+			}
+		}
+		foreach (Player in Players) {
+			if (Player.User != Winner) {
+				UnspawnPlayer(Player);
+			}
+			UpdateLayerInfo(Player);
+		}
+		
+		UIManager.UIAll.BigMessageSound = CUIConfig::EUISound::EndRound;
+		UIManager.UIAll.BigMessageSoundVariant = 0;
+		if (Winner != Null) {
+			UIManager.UIAll.BigMessage = """$<{{{Winner.Name}}}$>$z wins the match!""";
+		} else {
+			UIManager.UIAll.BigMessage = _("|Match|Draw");
+		}
+		sleep(2000);
+		UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+		UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+		sleep(5000);
+		
+		UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
+		wait(UIManager.UIAll.UISequenceIsCompleted);
+		
+		UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+		UIManager.UIAll.BigMessage = "";
+		
+		Mode::UnloadMap();
+	}
+	
+	/* -------------------------------------- */
+	// Destroy layers
+	UIManager.UILayerDestroy(TopsLayer);
+	UIManager.UILayerDestroy(BeerCarrierLayer);
+	LayerDestroyed = Layers::Destroy("ScoresTable");
+	LayerDestroyed = Layers::Destroy("ScoresinSpawn");
+	Rules::Destroy();
+}

@@ -1,0 +1,596 @@
+/****************************************
+*	Mode:		CustomMelee				*
+*	Author:		steeffeen				*
+*	Contact:	schteffens@gmail.com	*
+*										*
+*	With this file you can easily		*
+*	run a DeathMatch/Melee server		*
+*	based on any weapon you want.		*
+****************************************/
+
+#Extends "Modes/ShootMania/ModeBase.Script.txt"
+
+#Const	CompatibleMapTypes	"MeleeArena,RoyalArena"
+#Const	Version				"1.0 (2013-04-19)"
+#Const	ScriptName			"InstaDM.Script.txt"
+
+#Include "MathLib" as MathLib
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Layers.Script.txt" as Layers
+#Include "Libs/Nadeo/Message.Script.txt" as Message
+#Include "Libs/Nadeo/Interface.Script.txt" as Interface
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+#Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
+#Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
+#Include "Libs/Nadeo/ShootMania/ScoresTable.Script.txt" as ScoresTable
+
+// ---------------------------------- //
+// Settings
+// ---------------------------------- //
+#Setting	S_TimeLimit		600	as _("Time limit")		///< Time limit on a map
+#Setting	S_PointLimit	50	as _("Points limit")	///< Points limit on a map
+
+#Setting	S_WeaponNumber	2	as _("Used weapon (1: Rocket, 2: Laser, 3: Nucleus, 4: Arrow, else: Random)")
+//#Setting	S_WeaponNumber	2	as "<hidden>"
+#Setting	S_ArmorMax		1	as _("Max armor of players")
+#Setting	S_AmmoGain		1.0	as _("Ammunition gain factor")
+
+// ---------------------------------- //
+// Constants
+// ---------------------------------- //
+#Const	C_NeutralEmblemUrl	""		// Url of the neutral emblem that will be shown on spawns & goals
+#Const	C_AutoSwitchWeapon	False	// Automatically switch weapons (tunnels & laser pads) - With rockets => AutoTrue
+#Const	C_DisplayHitDist	True	// Enable to display the distance when you hit someone
+#Const	C_NearMissDist		0.5		// Max distance to show NearMiss message (-1 to disable the messages)
+#Const	C_AnnounceHeadshots	True	// Announce headshots with a headshot sound
+
+#Const	Description	_("TYPE: Free for all\nOBJECTIVE: Hit your opponents to score points. The first player to reach the points limit or the player with the highest score at the end of the time limit wins the map.")
+
+// ---------------------------------- //
+// Globales variables
+// ---------------------------------- //
+declare Integer G_OldWeaponNumber;	///< Cache for weapon number
+declare Ident[]	G_SpawnsList;		///< Id of all the BlockSpawns of the map
+declare Ident	G_LatestSpawnId;	///< Id of the last BlockSpawn used
+
+// ---------------------------------- //
+// Extend
+// ---------------------------------- //
+
+***LogVersion***
+***
+MB_LogVersion(ScriptName, Version);
+MB_LogVersion(SM::GetScriptName(), SM::GetScriptVersion());
+MB_LogVersion(Score::GetScriptName(), Score::GetScriptVersion());
+MB_LogVersion(Layers::GetScriptName(), Layers::GetScriptVersion());
+MB_LogVersion(Message::GetScriptName(), Message::GetScriptVersion());
+MB_LogVersion(Interface::GetScriptName(), Interface::GetScriptVersion());
+MB_LogVersion(ScoresTable::GetScriptName(), ScoresTable::GetScriptVersion());
+MB_LogVersion(SpawnScreen::GetScriptName(), SpawnScreen::GetScriptVersion());
+***
+
+// ---------------------------------- //
+// Set Rules
+// ---------------------------------- //
+***Rules***
+***
+declare ModeName = TextLib::Split(".", ScriptName)[0];
+SpawnScreen::CreateRules(ModeName, Description);
+***
+
+// ---------------------------------- //
+// Set ModeStatusMessage
+// ---------------------------------- //
+***ModeStatusMessage***
+***
+declare Message = """TYPE: Free for all
+OBJECTIVE: Hit a maximum of players to win the game.""";
+if (Scores.existskey(0)) {
+	Message ^= """
+Currently leading: {{{Scores[0].User.Name}}}""";
+}
+ModeStatusMessage = Message;
+***
+
+// ---------------------------------- //
+// Server start
+// ---------------------------------- //
+***StartServer***
+***
+// ---------------------------------- //
+// Set mode options
+UseClans = False;
+G_OldWeaponNumber = S_WeaponNumber;
+NeutralEmblemUrl = C_NeutralEmblemUrl;
+MB_NeutralEmblemUrl = C_NeutralEmblemUrl;
+
+// ---------------------------------- //
+// Create the rules
+---Rules---
+
+// ---------------------------------- //
+// Initialize UI
+SpawnScreen::CreateScores();
+SpawnScreen::CreateMapInfo();
+Interface::CreateRank();
+
+// ---------------------------------- //
+// Create the scores table
+ScoresTable::Load();
+ScoresTable::SetTableWidth(200.0);
+ScoresTable::SetColumnsWidth(1.7, 1.2, 3., 16., 2., 1.5, 0.1, 1.8, 1.8, 3.0, 4.);
+ScoresTable::SetColumnName("Custom2", "H/S");
+ScoresTable::SetColumnName("Custom3", "K/D");
+ScoresTable::SetTableFormat(2, 7);
+ScoresTable::Build();
+***
+
+// ---------------------------------- //
+// Map start
+// ---------------------------------- //
+***StartMap***
+***	
+//Users_SetNbFakeUsers(10, 0);
+G_SpawnsList.clear();
+G_LatestSpawnId = NullId;
+foreach (Base in Bases) {
+	Base.IsActive = True;
+}
+SM::SetupDefaultVisibility();
+
+// ---------------------------------- //
+// Init scores
+Score::MatchBegin();
+Score::RoundBegin();
+ScoresTable::StartMatch();
+yield; ///< Allow the scores array to be sorted
+foreach (Score in Scores) {
+	declare Integer LastPoint for Score;
+	LastPoint = 0;
+	declare Integer CurrentShotNb for Score;
+	declare Integer CurrentHitNb for Score;
+	declare Integer CurrentSpawnNb for Score;
+	declare Integer CurrentKillNb for Score;
+	CurrentShotNb = 0;
+	CurrentHitNb = 0;
+	CurrentSpawnNb = 0;
+	CurrentKillNb = 0;
+}
+declare LeaderId = NullId;
+declare CurrentPointLimit = -1;
+
+// ---------------------------------- //
+// New map sound
+UIManager.UIAll.SendNotice("", CUIConfig::ENoticeLevel::MatchInfo, Null, CUIConfig::EAvatarVariant::Default, CUIConfig::EUISound::StartRound, 0);
+
+StartTime = Now;
+EndTime = StartTime + (S_TimeLimit * 1000);
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+***
+
+***OnNewPlayer***
+***
+InitPlayer(Player);
+
+ScoresTable::SetFooterStats(Player, TextLib::Compose(_("Points limit: %1"), TextLib::ToText(S_PointLimit)));
+***
+
+***OnNewSpectator***
+***
+ScoresTable::SetFooterStats(Spectator, TextLib::Compose(_("Points limit: %1"), TextLib::ToText(S_PointLimit)));
+***
+
+// ---------------------------------- //
+// Play loop
+// ---------------------------------- //
+***PlayLoop***
+***
+// Check for setting update
+if (G_OldWeaponNumber != S_WeaponNumber) {
+	G_OldWeaponNumber = S_WeaponNumber;
+	
+	if (S_WeaponNumber >= 1 && S_WeaponNumber <= 4) {
+		// Init players with new forced weapon
+		foreach (Player in Players) {
+			InitPlayer(Player);
+		}
+	}
+}
+
+// Handle events
+foreach (Event in PendingEvents) {
+	switch (Event.Type) {
+		case CSmModeEvent::EType::OnArmorEmpty: {
+			// On armor empty
+			if (Event.Shooter == Event.Victim || Event.Shooter == Null) {
+				Score::RemovePoints(Event.Victim, 1);
+			} else {
+				if (Event.Shooter.Score != Null) {
+					declare CurrentKillNb for Event.Shooter.Score = 0;
+					CurrentKillNb += 1;
+					UpdateWinrate(Event.Shooter);
+				}
+			}
+			XmlRpc::OnArmorEmpty(Event);
+			PassOn(Event);
+		} 
+		case CSmModeEvent::EType::OnHit: {
+			// On hit
+			if (Event.Shooter == Event.Victim) {
+				Discard(Event);
+			} else {
+				SendHitDistanceMessage(Event);
+				DoHeadShot(Event);
+				
+				declare Points = 1;
+				Score::AddPoints(Event.Shooter, Points);
+				Event.ShooterPoints = Points;
+				
+				if (Event.Shooter.Score != Null) {
+					declare CurrentHitNb for Event.Shooter.Score = 0;
+					CurrentHitNb += 1;
+					UpdateHitrate(Event.Shooter);
+				}
+				
+				// ---------------------------------- //
+				// Play sound and notice if someone is close to win
+				if (Event.Shooter != Null && Event.Shooter.Score != Null) {	
+					declare LastPoint for Event.Shooter.Score = 0;
+					declare Gap = S_PointLimit - Event.Shooter.Score.RoundPoints - Event.Shooter.Score.Points;
+					if (Gap > 0 && Gap <= 3) {
+						declare Variant = 3 - Gap;
+						declare Msg = "";
+						if (Gap > 1) Msg = TextLib::Compose(_("$<%1$> is %2 points from victory!"), Event.Shooter.Name, TextLib::ToText(Gap));
+						else Msg = TextLib::Compose(_("$<%1$> is 1 point from victory!"), Event.Shooter.Name);
+						Message::SendBigMessage(Msg, 3000, 2, CUIConfig::EUISound::TieBreakPoint, Variant);
+					} else if (Gap <= 0) {
+						Message::SendBigMessage(
+							TextLib::Compose(_("$<%1$> gets the final hit!"), Event.Shooter.Name),
+							3000, 3, CUIConfig::EUISound::VictoryPoint, 0
+						);
+					} else {
+						declare SoundGap = S_PointLimit / 5;
+						if (SoundGap < 5) SoundGap = 5;
+						if ((Event.Shooter.Score.Points + Event.Shooter.Score.RoundPoints) / SoundGap > LastPoint) {
+							LastPoint = (Event.Shooter.Score.RoundPoints + Event.Shooter.Score.RoundPoints) / SoundGap;
+							declare Msg = TextLib::Compose(
+								_("$666Score : $fff%1 / %2"), TextLib::ToText(Event.Shooter.Score.Points + Event.Shooter.Score.RoundPoints), TextLib::ToText(S_PointLimit)
+							);
+							declare Variant = (((Event.Shooter.Score.Points + Event.Shooter.Score.RoundPoints) / SoundGap) - 1);
+							Message::SendBigMessage(Event.Shooter, Msg, 3000, 0, CUIConfig::EUISound::ScoreProgress, Variant);
+						}
+					}
+				}
+				XmlRpc::OnHit(Event);
+				PassOn(Event);
+			}
+		}
+		case CSmModeEvent::EType::OnPlayerRequestRespawn: {
+			// On player request respawn
+			Score::RemovePoints(Event.Player, 1);
+			XmlRpc::OnPlayerRequestRespawn(Event);
+			PassOn(Event);
+		} 
+		case CSmModeEvent::EType::OnShoot: {
+			// On shots
+			if (Event.Shooter.Score != Null) {
+				declare CurrentShotNb for Event.Shooter.Score = 0;
+				CurrentShotNb += 1;
+				UpdateHitrate(Event.Shooter);
+			}
+			XmlRpc::OnShoot(Event);
+			PassOn(Event);
+		}
+		case CSmModeEvent::EType::OnNearMiss: {
+			// On near miss
+			SendNearMissMessage(Event);
+			XmlRpc::OnNearMiss(Event);
+			PassOn(Event);
+		}
+		default: {
+			// Others
+			PassOn(Event);
+		}
+	}
+}	
+
+// ---------------------------------- //
+// Spawn players
+foreach (Player in Players) {
+	switch (Player.SpawnStatus) {
+		case CSmPlayer::ESpawnStatus::NotSpawned: {
+			MeleeSpawnPlayer(Player);
+		}
+	}
+}
+
+// ---------------------------------- //
+// Play sound and notice if someone is taking the lead
+declare OldLeaderId = LeaderId;
+declare LeaderPoints = 0;
+if (Scores.existskey(LeaderId)) {
+	LeaderPoints = Scores[LeaderId].Points + Scores[LeaderId].RoundPoints;
+}
+foreach (Score in Scores) {
+	declare Points = Score.Points + Score.RoundPoints;
+	if (Points > LeaderPoints) {
+		LeaderId = Score.Id;
+		LeaderPoints = Points;
+	}
+}
+if (LeaderId != OldLeaderId && Scores.existskey(LeaderId)) {
+	Message::SendBigMessage(TextLib::Compose(_("$<%1$> takes the lead!"), Scores[LeaderId].User.Name), 3000, 1, CUIConfig::EUISound::PhaseChange, 1);
+}
+
+// ---------------------------------- //
+// Update UI points limit
+if (CurrentPointLimit != S_PointLimit) {
+	CurrentPointLimit = S_PointLimit;
+	foreach (Player in AllPlayers) {
+		ScoresTable::SetFooterStats(Player, TextLib::Compose(_("Points limit: %1"), TextLib::ToText(S_PointLimit)));
+	}
+}
+
+Message::Loop();
+---ModeStatusMessage---
+
+// ---------------------------------- //
+// victory conditions
+declare IsMatchOver = False;
+if (Now > EndTime) IsMatchOver = True;
+foreach (Player in Players) {
+	if (Player.Score != Null && Player.Score.RoundPoints >= S_PointLimit) IsMatchOver = True;
+}
+
+if (IsMatchOver) MB_StopMap = True;
+***
+
+// ---------------------------------- //
+// Map end
+// ---------------------------------- //
+***EndMap***
+***
+EndTime = -1;
+Score::RoundEnd();
+Score::MatchEnd(True);
+ScoresTable::EndMatch();
+
+XmlRpc::SendRankings();
+
+// ---------------------------------- //
+// End match sequence
+declare CUser Winner <=> Null;
+declare MaxPoints = 0;
+foreach (Score in Scores) {
+	if (Score.Points > MaxPoints) {
+		MaxPoints = Score.Points;
+		Winner <=> Score.User;
+	} else if (Score.Points == MaxPoints) {
+		Winner <=> Null;
+	}
+}
+foreach (Player in Players) {
+	if (Player.User != Winner) UnspawnPlayer(Player);
+	Interface::UpdatePosition(Player);
+}
+
+MB_Sleep(1000);
+Message::CleanBigMessages();
+UIManager.UIAll.BigMessageSound = CUIConfig::EUISound::EndRound;
+UIManager.UIAll.BigMessageSoundVariant = 0;
+if (Winner != Null) {
+	UIManager.UIAll.BigMessage = TextLib::Compose(_("$<%1$> wins the match!"), Winner.Name);
+} else {
+	UIManager.UIAll.BigMessage = _("|Match|Draw");
+}
+MB_Sleep(2000);
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+MB_Sleep(5000);
+
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
+wait(UIManager.UIAll.UISequenceIsCompleted);
+
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+UIManager.UIAll.BigMessage = "";
+***
+
+// ---------------------------------- //
+// Server end
+// ---------------------------------- //
+***EndServer***
+***
+ScoresTable::Unload();
+Interface::DestroyRank();
+SpawnScreen::DestroyRules();
+SpawnScreen::DestroyScores();
+SpawnScreen::DestroyMapInfo();
+***
+
+// ---------------------------------- //
+// Functions
+// ---------------------------------- //
+
+// Update hitrate on the scorestable
+Void UpdateHitrate(CSmPlayer _Player) {
+	if (_Player != Null && _Player.Score != Null) {
+		declare CurrentShotNb for _Player.Score = 0;
+		declare CurrentHitNb for _Player.Score = 0;
+		if (CurrentShotNb > 0) {
+			declare Hitrate = (CurrentHitNb * 1.0) / (CurrentShotNb * 1.0);
+			if (Hitrate > 0.0) {
+				ScoresTable::SetCustom2(_Player, TextLib::ToText(MathLib::NearestInteger(Hitrate*10.0) / 10.0));
+			}
+		}
+	}
+}
+
+// Update winrate on the scorestable
+Void UpdateWinrate(CSmPlayer _Player) {
+	if (_Player != Null && _Player.Score != Null) {
+		declare CurrentSpawnNb for _Player.Score = 0;
+		declare CurrentKillNb for _Player.Score = 0;
+		if (CurrentSpawnNb > 0) {
+			declare Winrate = (CurrentKillNb * 1.0) / (CurrentSpawnNb * 1.0);
+			if (Winrate > 0.0) {
+				ScoresTable::SetCustom3(_Player, TextLib::ToText(MathLib::NearestInteger(Winrate*10.0) / 10.0));
+			}
+		}
+	}
+}
+
+// Get the currently used weapon
+CSmMode::EWeapon GetWeapon() {
+	declare WeaponNumber = S_WeaponNumber;
+	
+	if (WeaponNumber < 1 || WeaponNumber > 4) {
+		// Random weapon
+		WeaponNumber = MathLib::Rand(1, 4);
+	}
+	
+	// Return weapon
+	switch (WeaponNumber) {
+		case 2: {
+			return CSmMode::EWeapon::Laser;
+		}
+		case 3: {
+			return CSmMode::EWeapon::Nucleus;
+		}
+		case 4: {
+			return CSmMode::EWeapon::Arrow;
+		}
+	}
+	return CSmMode::EWeapon::Rocket;
+}
+
+// Get whether weapons should be switched automatically
+Boolean GetAutoSwitchWeapon(CSmMode::EWeapon _Weapon) {
+	return (C_AutoSwitchWeapon || _Weapon == CSmMode::EWeapon::Rocket);
+}
+
+// Initialize values for a given player
+Void InitPlayer(CSmPlayer _Player) {
+	if (_Player.SpawnStatus != CSmPlayer::ESpawnStatus::Spawned) {
+		declare Weapon = GetWeapon();
+		This.SetPlayerWeapon(_Player, Weapon, GetAutoSwitchWeapon(Weapon));
+	}
+	_Player.AmmoGain = S_AmmoGain;
+	_Player.ArmorMax = S_ArmorMax * 100;
+}
+
+// Sends a message for a near miss
+Void SendNearMissMessage(CSmModeEvent _Event) {
+	// Catch invalid events
+	if (_Event.Type != CSmModeEvent::EType::OnNearMiss) return;					// Wrong event type
+	if (C_NearMissDist <= 0.0) return;											// Near miss message disabled
+	if (_Event.Shooter == Null || _Event.Victim == Null || _Event.Shooter == _Event.Victim) return;	// Invalid players
+	if (_Event.MissDist <= 0.0 || _Event.MissDist > C_NearMissDist) return;		// Invalid miss distance
+	
+	// Get distance
+	declare Message = "";
+	declare Dist = MathLib::NearestInteger(_Event.MissDist * 1000);
+	if (Dist >= 10) {
+		Message = (Dist/10.0)^"cm!";
+	} else {
+		Dist = MathLib::NearestInteger(_Event.MissDist * 10000);
+		if (Dist >= 10) {
+			Message = (Dist/10.0)^"mm!";
+		} else {
+			Dist = MathLib::NearestInteger(_Event.MissDist * 10000000);
+			Message = (Dist/10.0)^"µm!";
+		}
+	}
+	
+	// Send message
+	Message::SendStatusMessage(_Event.Shooter, TextLib::Compose(_("You missed $<%1$> by %2"), _Event.Victim.Name, Message), 3000, 0);
+}
+
+// Sends a message for hit distances
+Void SendHitDistanceMessage(CSmModeEvent _Event) {
+	// Catch invalid events
+	if (_Event.Type != CSmModeEvent::EType::OnHit) return;				// Wrong event type
+	if (!C_DisplayHitDist) return;										// Hit distance message disabled
+	if (_Event.Shooter == Null || _Event.Victim == Null || _Event.Shooter == _Event.Victim) return;	// Invalid players
+	
+	declare UI <=> UIManager.GetUI(_Event.Shooter);
+	if (UI != Null) {
+		// Get distance
+		declare Distance = MathLib::Distance(_Event.Shooter.Position, _Event.Victim.Position);
+		Distance = MathLib::NearestInteger(Distance * 10) / 10.0;
+		
+		// Send message
+		UI.SendNotice(TextLib::Compose(_("%1m hit!"), TextLib::ToText(Distance)),
+			CUIConfig::ENoticeLevel::Default, Null, CUIConfig::EAvatarVariant::Default,
+			CUIConfig::EUISound::Silence, 0);
+	}
+}
+
+// Calculates skalar of two vectors
+Real Skalar(Vec3 _Vec1, Vec3 _Vec2) {
+	return _Vec1[0]*_Vec2[0] + _Vec1[1]*_Vec2[1] + _Vec1[2]*_Vec2[2];
+}
+
+// Calculates sum of two vectors
+Vec3 Sum(Vec3 _Vec1, Vec3 _Vec2) {
+	return <_Vec1[0]+_Vec2[0], _Vec1[1]+_Vec2[1], _Vec1[2]+_Vec2[2]>;
+}
+
+// Plays headshot sound on headshot
+Void DoHeadShot(CSmModeEvent _Event) {
+	if (C_AnnounceHeadshots && _Event != Null && _Event.Shooter != Null && _Event.Victim != Null && _Event.WeaponNum == This.GetWeaponIndex(CSmMode::EWeapon::Laser)+1) {
+		declare UI <=> UIManager.GetUI(_Event.Shooter);
+		if (UI != Null) {
+			declare HeadPosi = <_Event.Victim.Position[0]+_Event.Victim.AimDirection[0]*0.2, _Event.Victim.Position[1]+1.5, _Event.Victim.Position[2]+_Event.Victim.AimDirection[2]*0.2>;
+			declare ShootPosi = _Event.Shooter.Position+<0.0, 1.35, 0.0>;
+			declare ShootDir = _Event.Shooter.AimDirection;
+			
+			declare a1 = Skalar(ShootDir, ShootPosi);
+			declare a2 = Skalar(ShootDir, ShootDir);
+			declare a3 = Skalar(ShootDir, -HeadPosi);
+			
+			declare gamma = (a1+a3)/(-1*a2);
+			declare stutz = Sum(ShootPosi, gamma*ShootDir);
+			
+			declare distance = MathLib::Distance(HeadPosi, stutz);
+			if (distance < 0.22) {
+				Message::SendStatusMessage(_Event.Shooter, "Headshot!", 2000, 0);
+				UI.ManialinkPage = """
+					// {{{Now}}}
+					<audio data="http://dl.dropboxusercontent.com/u/58886549/ManiaPlanet/Media/headshot0.ogg" play="1" looping="0" hidden="1"/>""";
+			}
+		}
+	}
+}
+
+// Spawn the given player
+Void MeleeSpawnPlayer(CSmPlayer _Player) {
+	if (!_Player.RequestsSpectate) {
+		if (_Player.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned) {
+			UnspawnPlayer(_Player);
+		}
+		
+		InitPlayer(_Player);
+		
+		if (G_SpawnsList.count == 0) {
+			foreach (BlockSpawn in BlockSpawns) G_SpawnsList.add(BlockSpawn.Id);
+		}
+		
+		declare SpawnId = NullId;
+		while (True) {
+			SpawnId = G_SpawnsList[MathLib::Rand(0, G_SpawnsList.count - 1)];
+			if (SpawnId != G_LatestSpawnId) break;
+			if (G_SpawnsList.count == 1) break;
+		}
+		G_LatestSpawnId = SpawnId;
+		if (_Player.Score != Null) {
+			_Player.Score.Points += _Player.Score.RoundPoints;
+			_Player.Score.RoundPoints = 0;
+			
+			declare CurrentSpawnNb for _Player.Score = 0;
+			CurrentSpawnNb += 1;
+			UpdateWinrate(_Player);
+		}
+		SM::SpawnPlayer(_Player, 0, BlockSpawns[SpawnId]);
+		declare Removed = G_SpawnsList.remove(SpawnId);
+	}
+}

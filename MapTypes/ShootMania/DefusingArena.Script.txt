@@ -1,0 +1,293 @@
+/****************************************
+*	MapType for Defusing Maps			*
+*	Author:		steeffeen				*
+*	Contact:	mail@steeffeen.com		*
+****************************************/
+
+#RequireContext CSmMapType
+
+
+/****************************************
+	INCLUDES
+****************************************/
+
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Anchor.Script.txt" as Anchor
+
+
+/****************************************
+	CONSTANTS
+****************************************/
+
+#Const	Version	"0.1 (2013-10-27)"
+
+
+/****************************************
+	FUNCTIONS
+****************************************/
+
+// Check if the map is valid and update the validation status
+Void UpdateValidability() {
+	Anchor::UpdateAnchorCounts();
+	
+	ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+	
+	// Check for at least one spawn for each team
+	for (Clan, 1, 2) {
+		if (!Anchor::HasAtLeastOneAnchor("Spawn", Clan, _("Each Team needs at least one Spawn!"))) {
+			return;
+		}
+	}
+	
+	// Check for at least one goal (A)
+	if (!Anchor::HasAtLeastOneAnchor("A", 0, _("You need to place at least one Bomb Goal (A)!"))) {
+		return;
+	}
+	
+	declare Goals = ["A", "B", "C"];
+	foreach (Index => Goal in Goals) {
+		// Check for multiple goals with the same name
+		if (Anchor::HasAtLeastOneAnchor(Goal, 0, "")) {
+			if (!Anchor::HasExactlyOneAnchor(Goal, 0, TextLib::Compose(_("Only one Goal can be named '%1' at a time!"), Goal))) {
+				return;
+			}
+		}
+	
+		// Check for presence of a goal without its predecessor
+		if (!Goals.existskey(Index-1)) continue;
+		declare PrevGoal = Goals[Index-1];
+		if (Anchor::HasAtLeastOneAnchor(Goal, 0, "")) {
+			if (!Anchor::HasAtLeastOneAnchor(PrevGoal, 0, TextLib::Compose(_("You need to have a '%1' before having a '%2'!"), PrevGoal, Goal))) {
+				return;
+			}
+		}
+	}
+	
+	// Valid map!
+	ValidabilityRequirementsMessage = "";
+	ValidationStatus = CSmMapType::ValidationStatus::Validated;
+}
+
+// Edit the given goal anchor
+Void EditGoal(CAnchorData _Anchor) {
+	declare Text AnchorTag for ManialinkPage;
+	declare Integer Finish for ManialinkPage;
+	
+	// Define rules for spawns
+	declare Rules = TextLib::Compose("%1\n%2",
+		_("You can place up to 3 Bomb Goals!"),
+		_("Only one Goal can be named 'A' at a time etc.!"));
+	
+	// Set manialink
+	ManialinkText = """<script><!--
+		main() {
+			declare Buttons = [	(Page.GetFirstChild("A") as CMlLabel),
+								(Page.GetFirstChild("B") as CMlLabel),
+								(Page.GetFirstChild("C") as CMlLabel)];
+			
+			declare Text AnchorTag for Page;
+			declare Integer Finish for Page;
+			
+			Finish = 0;
+			while (Finish == 0) {
+				yield;
+				
+				foreach (Button in Buttons) {
+					if (AnchorTag == Button.ControlId) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				foreach (Event in PendingEvents) {
+					switch (Event.Type){
+						case CMlEvent::Type::MouseClick: {
+							switch (Event.ControlId) {
+								case "Cancel": {
+									Finish = -1;
+								}
+								default: {
+									AnchorTag = Event.ControlId;
+									Finish = 1;
+								}
+							}
+						}	
+					}
+				}
+			}
+		}
+		--></script>
+		<frame posn="120 40">
+			<quad posn="0 7 2" sizen="72 15" style="Bgs1InRace" substyle="BgTitle3_5" halign="center" valign="center2"/>
+			<label posn="0 7 3" style="TextTitle3" textsize="4" textprefix="$fff" translate="1" text="Edit Goal" halign="center" valign="center2"/>
+			
+			<frame posn="0 -12">
+				<quad posn="0 13 -1" sizen="68 30" style="Bgs1" substyle="BgWindow2" halign="center" valign="top"/>
+				
+				<label id="A" posn="-10 2" textsize="8" style="TextButtonMedium" scriptevents="1" halign="right" valign="center2"/>
+				<label id="B" posn="0 2" textsize="8" style="TextButtonMedium" scriptevents="1" halign="center" valign="center2"/>
+				<label id="C" posn="10 2" textsize="8" style="TextButtonMedium" scriptevents="1" halign="left" valign="center2"/>
+				
+				<label id="Cancel" posn="0 -10" style="CardButtonSmall" translate="1" text="Cancel" scriptevents="1" halign="center" valign="center2"/>
+			</frame>
+	    </frame>
+		<frame posn="120 -5">
+			<quad posn="0 6 2" sizen="72 15" style="Bgs1InRace" substyle="BgTitle3_5" halign="center" valign="center2"/>
+			<label posn="0 6 3" style="TextTitle3" textsize="4" textprefix="$fff" translate="1" text="Rules" halign="center" valign="center2"/>
+			
+			<quad posn="0 0 -2" sizen="68 18" style="Bgs1" substyle="BgWindow2" halign="center" valign="top"/>
+			<label posn="-30 -4 -1" sizen="60 5" autonewline="1" style="TextCardSmallScores2" textprefix="$333" translate="1" text="{{{Rules}}}"
+				halign="left" valign="top"/>
+		</frame>""";
+	
+	// Set current value
+	AnchorTag = _Anchor.Tag;
+	
+	// Wait for user action
+	Finish = 0;
+	while (Finish == 0) {
+		yield;
+	}
+	
+	// Only save changes if pressed on Okay
+	if (Finish > 0) {
+		_Anchor.Tag = AnchorTag;
+		_Anchor.Order = 0;
+	}
+}
+
+// Edit the given spawn anchor
+Void EditSpawn(CAnchorData _Anchor) {
+	declare Integer AnchorOrder for ManialinkPage;
+	declare Integer Finish for ManialinkPage;
+	
+	// Define rules for spawns
+	declare Rules = TextLib::Compose("%1\n%2",
+		_("You need to place at least one Spawn for each Team!"),
+		_("Team 1 will try to plant the Bomb while Team 2 will try to defend the Bomb Goals!"));
+	
+	// Set manialink
+	ManialinkText = """<script><!--
+		#Include "TextLib" as TextLib
+		
+		main() {
+			declare Buttons = [	(Page.GetFirstChild("1") as CMlLabel),
+								(Page.GetFirstChild("2") as CMlLabel)];
+			
+			declare Integer AnchorOrder for Page;
+			declare Integer Finish for Page;
+			
+			Finish = 0;
+			while (Finish == 0) {
+				yield;
+				
+				foreach (Button in Buttons) {
+					if (TextLib::ToText(AnchorOrder) == Button.ControlId) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				foreach (Event in PendingEvents) {
+					switch (Event.Type){
+						case CMlEvent::Type::MouseClick : {
+							switch (Event.ControlId) {
+								case "Cancel": {
+									Finish = -1;
+								}
+								default: {
+									declare Order = TextLib::ToInteger(Event.ControlId);
+									if (Order > 0) {
+										AnchorOrder = Order;
+										Finish = 1;
+									}
+								}
+							}
+						}	
+					}
+				}
+			}
+		}
+		--></script>
+		<frame posn="120 40">
+			<quad posn="0 7 2" sizen="72 15" style="Bgs1InRace" substyle="BgTitle3_5" halign="center" valign="center2"/>
+			<label posn="0 7 3" style="TextTitle3" textsize="4" textprefix="$fff" translate="1" text="Edit Spawn" halign="center" valign="center2"/>
+			
+			<frame posn="0 -12">
+				<quad posn="0 13 -1" sizen="68 30" style="Bgs1" substyle="BgWindow2" halign="center" valign="top"/>
+				
+				<label id="1" posn="-7 2" textsize="9" style="TextButtonMedium" scriptevents="1" halign="right" valign="center2"/>
+				<label id="2" posn="7 2" textsize="9" style="TextButtonMedium" scriptevents="1" halign="left" valign="center2"/>
+				
+				<label id="Cancel" posn="0 -10" style="CardButtonSmall" translate="1" text="Cancel" scriptevents="1" halign="center" valign="center2"/>
+			</frame>
+	    </frame>
+		<frame posn="120 -5">
+			<quad posn="0 6 2" sizen="72 15" style="Bgs1InRace" substyle="BgTitle3_5" halign="center" valign="center2"/>
+			<label posn="0 6 3" style="TextTitle3" textsize="4" textprefix="$fff" translate="1" text="Rules" halign="center" valign="center2"/>
+			
+			<quad posn="0 0 -2" sizen="68 25" style="Bgs1" substyle="BgWindow2" halign="center" valign="top"/>
+			<label posn="-30 -4 -1" sizen="60 5" autonewline="1" style="TextCardSmallScores2" textprefix="$333" translate="1" text="{{{Rules}}}"
+				halign="left" valign="top"/>
+		</frame>""";
+	
+	// Set current value
+	AnchorOrder = _Anchor.Order;
+	
+	// Wait for user action
+	Finish = 0;
+	while (Finish == 0) {
+		yield;
+	}
+	
+	// Only save changes if pressed on Okay
+	if (Finish > 0) {
+		_Anchor.Tag = "Spawn";
+		_Anchor.Order = AnchorOrder;
+	}
+}
+
+
+/****************************************
+	MAIN
+****************************************/
+
+main() {
+	// Enable anchor editing
+	CustomEditAnchorData = True;
+	
+	UpdateValidability();
+	
+	while (True) {
+		yield;
+		
+		ManialinkText = "";
+		
+		foreach (Event in PendingEvents) {
+			switch (Event.Type) {
+				case CPluginEvent::Type::MapModified: {
+					UpdateValidability();
+				}
+				case CPluginEvent::Type::EditAnchor: {
+					declare Anchor <=> AnchorData[Event.EditedAnchorDataId];
+					
+					switch (Anchor.DefaultTag) {
+						case "Goal": {
+							EditGoal(Anchor);
+						}
+						case "Checkpoint": {
+							EditGoal(Anchor);
+						}
+						case "Spawn": {
+							EditSpawn(Anchor);
+						}
+					}
+					
+					UpdateValidability();
+				}
+			}
+		}		
+	}	
+}

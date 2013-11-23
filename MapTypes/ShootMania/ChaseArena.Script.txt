@@ -1,0 +1,27 @@
+/****************************************
+*	MapType for Tjost2Arena				*
+*	Author:		steeffeen				*
+*	Contact:	schteffens@gmail.com	*
+****************************************/
+
+#RequireContext CSmMapType
+
+#Const	Version	"0.1 (2013-04-08)"
+
+// Main
+main() {
+	CustomEditAnchorData = False;
+	ValidationStatus = CSmMapType::ValidationStatus::Validated;
+	
+	while (True) {
+		yield;
+		
+		foreach (Event in PendingEvents) {
+			switch (Event.Type) {
+				case CPluginEvent::Type::MapModified: {
+					ValidationStatus = CSmMapType::ValidationStatus::Validated;
+				}
+			}
+		}
+	}
+}

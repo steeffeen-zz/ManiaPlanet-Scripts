@@ -1,0 +1,1120 @@
+/************************************
+*	Athletics Game Mode				*
+*	Author: steeffeen				*
+*	Contact: schteffens@gmail.com	*
+************************************/
+
+/* TODO:
+- 
+- disciplines dependent on map
+- tabs
+*/
+
+#Extends "Modes/ShootMania/ModeBase.Script.txt"
+
+#Include "MathLib" as MathLib
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Chrono.Script.txt" as Chrono
+#Include "Libs/Nadeo/TabsServer.Script.txt" as Tabs
+#Include "Libs/Nadeo/Top2.Script.txt" as Top
+#Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
+#Include "Libs/Nadeo/ShootMania/ScoresTable.Script.txt" as ScoresTable
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+#Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
+
+#Const	CompatibleMapTypes	"AthleticsArena"
+#Const	Version 			"0.3 (2013-02-25)"
+
+// SETTINGS
+#Setting	S_TimeLimit		15	as _("Time limit per map (minutes)")
+
+// CONSTANTS
+// Gameplay contants
+#Const	C_PointsPerDiscipline	1000.0	// Points granted to the winner of a certain discipline
+#Const	C_SpeedSkatingRounds	2		// Rounds to finish the speed skating track
+// UI contants
+#Const	C_UITickRate			250		// Time between ui updates
+
+// Map constants - !DO NOT CHANGE!
+#Const	SpawnTags	[0 => "Lobby", 1 => "SkiJump", 2 => "Hurdles", 3 => "Swimming", 4 => "Sprint", 5 => "SpeedSkating"]
+
+// GLOBALES
+declare Integer G_LastUIUpdate;				// Time of last ui update
+declare Integer G_SpeedSkatingCPCount;		// Count of speed skating checkpoints
+declare Real G_SkiJumpRecord;				// Ski jumping record
+declare Integer G_HurdlesRecord;			// Hurdles record
+declare Integer G_SwimmingRecord;			// Swimming record
+declare Integer G_SprintRecord;				// Sprint record
+declare Integer G_SpeedSkatingRecord;		// Speed skating record
+
+***StartServer***
+***
+log("Athletics.Script.txt loaded!");
+log("Version: "^Version);
+
+// Gameplay
+UseClans = False;
+UsePvPWeapons = False;
+UsePvPCollisions = False;
+
+// UI Layers
+Chrono::Load();
+// Utility layer
+declare UtilityLayer <=> UIManager.UILayerCreate();
+UtilityLayer.ManialinkPage = GetUtilityLayerManialink();
+// Markers layer
+declare MarkersLayer <=> UIManager.UILayerCreate();
+MarkersLayer.Type = CUILayer::EUILayerType::Markers;
+// Discipline rankings layer
+declare DisciplineRankingsLayer <=> UIManager.UILayerCreate();
+DisciplineRankingsLayer.Type = CUILayer::EUILayerType::AltMenu;
+DisciplineRankingsLayer.ManialinkPage = GetDisciplineRankingsLayer();
+// Rules
+SpawnScreen::CreateRules("Athletics", "Rock dat shit!");
+***
+
+***StartMap***
+***
+// UI
+UIManager.ResetAll();
+UIManager.UIAll.AltMenuNoDefaultScores = True;
+UIManager.UIAll.AltMenuNoCustomScores = True;
+SM::SetupDefaultVisibility();
+// Layers
+UIManager.UIAll.UILayers.add(MarkersLayer);
+SpawnScreen::AttachRules();
+SpawnScreen::CreateScores();
+SpawnScreen::AttachScores();
+UIManager.UIAll.UILayers.add(UtilityLayer);
+UIManager.UIAll.UILayers.add(DisciplineRankingsLayer);
+// Tabs
+Tabs::Load();
+declare CUILayer TabsLayer <=> CreateTabPaneLayer(
+	["ScoresTab"	=> "http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/Ranking.png",
+	"SkiJumpingTab" => "http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/Ski-Jump-Button.png",
+	"HurdlesTab"	=> "http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/Hurdling-Button.png",
+	"SprintTab"		=> "http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/Sprint-Button.png",
+	"SpeedSkatingTab" => "http://dl.dropbox.com/u/58886549/ManiaPlanet/Images/Speedskating-Button.png",
+	"ClimbingTab"	=> "https://dl.dropbox.com/u/58886549/ManiaPlanet/Images/Climbing-Button.png"],
+	5, -5, False);
+TabsLayer.Type = CUILayer::EUILayerType::AltMenu;
+UIManager.UIAll.UILayers.add(TabsLayer);
+// Scores table
+ScoresTable::Load();
+ScoresTable::SetColumnsWidth(2., 2., 3., 19., 1.5, 1.5, 0., 0., 0., 0., 5.);
+ScoresTable::SetColumnsName("", "", "", "", "Score");
+ScoresTable::SetTableFormat(2, 8);
+ScoresTable::SetTableWidth(239.);
+ScoresTable::Build();
+ScoresTable::GetLayerScoresTable().Type = CUILayer::EUILayerType::Normal;
+
+// Initialize map
+foreach (Spawn in BlockSpawns) {
+	Spawn.Base.Clan = 0;
+	Spawn.Base.IsActive = True;
+}
+G_SpeedSkatingCPCount = 0;
+foreach (Pole in BlockPoles) {
+	Pole.Base.Clan = 0;
+	Pole.Base.IsActive = True;
+	Pole.Gauge.Clan = 0;
+	Pole.Gauge.ValueReal = 1.0;
+	
+	switch (Pole.Tag) {
+		case "SpeedSkatingCP": {
+			G_SpeedSkatingCPCount += 1;
+		}
+	}
+}
+UIManager.UIAll.Hud3dMarkers = GetHud3dMarkers();
+MarkersLayer.ManialinkPage = GetMarkersLayerManialink();
+
+// Initialize scores
+Score::MatchBegin();
+InitAllPlayersScores(True);
+
+// Start game
+StartTime = Now + 3000;
+EndTime = StartTime + S_TimeLimit * 60000;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+***
+
+***OnNewPlayer***
+***
+declare Integer Discipline for Player;
+Discipline = 0;
+
+InitPlayerScore(Player.Score, False);
+
+UpdatePlayerScore(Player.Score);
+
+declare UI <=> UIManager.GetUI(Player);
+if (UI != Null) {
+	Tabs::UseTabs(UI, "ScoresTab");
+}
+***
+
+***PlayLoop***
+***
+// Actions for each player
+foreach (Player in Players) {
+	switch (Player.SpawnStatus) {
+		case CSmPlayer::ESpawnStatus::NotSpawned: {
+			// Spawn the player
+			MySpawnPlayer(Player);
+			Chrono::Start(Player.Id, Player.StartTime-Now);
+		}
+		case CSmPlayer::ESpawnStatus::Spawned: {
+			declare Discipline for Player = 0;
+			switch (Discipline) {
+				case 1: {
+					// SKI JUMPING
+					if (Player.IsTouchingGround) {
+						// Check for jump length
+						declare AirTimeBegin for Player = -1;
+						if (AirTimeBegin >= 0) {
+							declare Vec3 AirTimeBeginPosition for Player;
+							declare Distance = MathLib::Distance(AirTimeBeginPosition, Player.Position);
+							EvaluateSkiJump(Player, Distance);
+							AirTimeBegin = -1;
+						}
+					} else {
+						declare AirTimeBegin for Player = -1;
+						if (AirTimeBegin < 0) {
+							// Begin air time
+							AirTimeBegin = Now;
+							declare Vec3 AirTimeBeginPosition for Player;
+							AirTimeBeginPosition = Player.Position;
+						}
+					}
+				}
+				case 2: {
+					// HURDLES
+					if (Player.BlockPole != Null && Player.BlockPole.Tag == "HurdlesFinish") {
+						// Player reached finish
+						declare Time = Now - Player.StartTime;
+						EvaluateHurdlesTime(Player, Time);
+						UnspawnPlayer(Player);
+					}
+				}
+				case 3: {
+					// SWIMMING
+					if (Player.BlockPole != Null && Player.BlockPole.Tag == "SwimmingFinish") {
+						// Player reached finish
+						declare Time = Now - Player.StartTime;
+						EvaluateSwimmingTime(Player, Time);
+						UnspawnPlayer(Player);
+					}
+				}
+				case 4: {
+					// SPRINT
+					if (Player.BlockPole != Null && Player.BlockPole.Tag == "SprintFinish") {
+						// Player reached finish
+						declare Time = Now - Player.StartTime;
+						EvaluateSprintTime(Player, Time);
+						UnspawnPlayer(Player);
+					}
+				}
+				case 5: {
+					// SPEED SKATING
+					if (Player.BlockPole != Null && Player.BlockPole.Tag == "SpeedSkatingCP") {
+						// Player reached a speed skating cp
+						declare SpeedSkatingStartId for Player = NullId;
+						declare SpeedSkatingCPs for Player = Ident[];
+						declare SpeedSkatingRounds for Player = 0;
+						declare UI <=> UIManager.GetUI(Player);
+						
+						if (SpeedSkatingStartId == NullId) {
+							// Try just started
+							SpeedSkatingStartId = Player.BlockPole.Id;
+							if (UI != Null) {
+								UI.SendNotice(
+									"", CUIConfig::ENoticeLevel::Default, 
+									Null, CUIConfig::EAvatarVariant::Default, 
+									CUIConfig::EUISound::Checkpoint, 4);
+							}
+						} else {
+							if (Player.BlockPole.Id == SpeedSkatingStartId) {
+								// Start reached again
+								if (SpeedSkatingCPs.count+1 >= G_SpeedSkatingCPCount) {
+									// Round finished
+									SpeedSkatingRounds += 1;
+									SpeedSkatingCPs.clear();
+									
+									if (SpeedSkatingRounds >= C_SpeedSkatingRounds) {
+										// Run finished
+										declare Time = Now - Player.StartTime;
+										EvaluateSpeedSkatingTime(Player, Time);
+										UnspawnPlayer(Player);
+										if (UI != Null) {
+											UI.SendNotice(
+												"", CUIConfig::ENoticeLevel::Default, 
+												Null, CUIConfig::EAvatarVariant::Default, 
+												CUIConfig::EUISound::Finish, 0);
+										}
+									} else {
+										if (UI != Null) {
+											UI.SendNotice(
+												"", CUIConfig::ENoticeLevel::Default, 
+												Null, CUIConfig::EAvatarVariant::Default, 
+												CUIConfig::EUISound::Checkpoint, 1);
+										}
+									}
+								}
+							} else {
+								// CP reached
+								if (!SpeedSkatingCPs.exists(Player.BlockPole.Id)) {
+									SpeedSkatingCPs.add(Player.BlockPole.Id);
+									if (UI != Null) {
+										UI.SendNotice(
+											"", CUIConfig::ENoticeLevel::Default, 
+											Null, CUIConfig::EAvatarVariant::Default, 
+											CUIConfig::EUISound::Checkpoint, 1);
+									}
+								}
+							}
+						}
+					}
+				}
+				default: {
+					// LOBBY
+					if (Player.BlockPole != Null) {
+						declare SpawnTag = TextLib::SubString(Player.BlockPole.Tag, 0, TextLib::Length(Player.BlockPole.Tag)-4);
+						if (SpawnTags.exists(SpawnTag)) {
+							declare Disci = SpawnTags.keyof(SpawnTag);
+							declare Integer Discipline for Player;
+							Discipline = Disci;
+							UnspawnPlayer(Player);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// Handle events
+foreach (Event in PendingEvents) {
+	switch (Event.Type) {
+		case CSmModeEvent::EType::OnArmorEmpty: {
+			if (Event.Victim != Null && Event.Shooter == Null) {
+				declare Integer Discipline for Event.Victim;
+				switch (Discipline) {
+					case 1: {
+						// Ski jumping - Check for jump length
+						declare AirTimeBegin for Event.Victim = -1;
+						if (AirTimeBegin >= 0) {
+							declare Vec3 AirTimeBeginPosition for Event.Victim;
+							declare Distance = MathLib::Distance(AirTimeBeginPosition, Event.Victim.Position);
+							EvaluateSkiJump(Event.Victim, Distance);
+							AirTimeBegin = -1;
+						}
+					}
+				}
+				UnspawnPlayer(Event.Victim);
+				Discard(Event);
+			} else {
+				PassOn(Event);
+			}
+		}
+		case CSmModeEvent::EType::OnHit: {
+			Discard(Event);
+		}
+		default: {
+			PassOn(Event);
+		}
+	}
+}
+
+// UI updates
+if (G_LastUIUpdate + C_UITickRate < Now) {
+	G_LastUIUpdate = Now;
+	
+	// Players
+	foreach (Player in Players) {
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI != Null) {
+			// Update utility layer
+			UpdateUtilityLayer(Player, UI);
+			
+			// Update discipline in UI
+			declare Discipline as DisciplinePlayer for Player = 0;
+			declare netwrite Discipline as DisciplineUI for UI = 0;
+			DisciplineUI = DisciplinePlayer;
+		}
+	}
+	
+	// Spectators
+	foreach (Spectator in Spectators) {
+		declare UI <=> UIManager.GetUI(Spectator);
+		if (UI != Null) {
+			// Update discipline in UI
+			declare netwrite Discipline for UI = 0;
+			Discipline = -1;
+		}
+	}
+}
+
+// Map end conditions
+if (Now >= EndTime) {
+	MB_StopMap = True;
+}
+***
+
+***EndMap***
+***
+Score::MatchEnd();
+
+declare CUser Winner <=> Null;
+declare Best = 0;
+foreach (Score in Scores) {
+	if (Score.Points > Best) {
+		Winner = Score.User;
+		Best = Score.Points;
+	}
+}
+declare Message = "Match Draw";
+if (Winner != Null) {
+	Message = """$<{{{Winner.Name}}}$> wins the map!""";
+}
+UIManager.UIAll.BigMessage = Message;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+
+MB_Sleep(4000);
+***
+
+***EndServer***
+***
+// UI cleanup
+Chrono::Unload();
+SpawnScreen::DestroyRules();
+SpawnScreen::DestroyScores();
+UIManager.UILayerDestroy(UtilityLayer);
+***
+
+// Initializes records
+Void InitPlayerScore(CSmScore _Score, Boolean _Forced) {
+	if (_Score != Null) {
+		declare RealNewPlayer for _Score = True;
+		if (RealNewPlayer || _Forced) {
+			declare Real SkiJumpRecord for _Score;
+			SkiJumpRecord = -1.0;
+			
+			declare Integer HurdlesRecord for _Score;
+			HurdlesRecord = -1;
+			
+			declare Integer SwimmingRecord for _Score;
+			SwimmingRecord = -1;
+			
+			declare Integer SprintRecord for _Score;
+			SprintRecord = -1;
+			
+			declare Integer SpeedSkatingRecord for _Score;
+			SpeedSkatingRecord = -1;
+			
+			RealNewPlayer = False;
+		}
+	}
+}
+
+Void InitAllPlayersScores(Boolean _Forced) {
+	if (_Forced) {
+		G_SkiJumpRecord = -1.0;
+		G_HurdlesRecord = -1;
+		G_SwimmingRecord = -1;
+		G_SprintRecord = -1;
+		G_SpeedSkatingRecord = -1;
+	}
+	
+	foreach (Score in Scores) {
+		InitPlayerScore(Score, _Forced);
+	}
+}
+
+// Spawn player depending on discipline
+Void MySpawnPlayer(CSmPlayer _Player) {
+	declare Discipline for _Player = 0;
+	
+	// Reset discipline values
+	switch (Discipline) {
+		case 0: {
+			// Lobby
+			Chrono::Destroy(_Player.Id);
+		}
+		case 1: {
+			// Ski jumping
+			declare Integer AirTimeBegin for _Player;
+			AirTimeBegin = -1;
+			Chrono::Destroy(_Player.Id);
+		}
+		case 5: {
+			// Speed skating
+			declare Ident SpeedSkatingStartId for _Player;
+			SpeedSkatingStartId = NullId;
+			declare Ident[] SpeedSkatingCPs for _Player;
+			SpeedSkatingCPs = Ident[];
+			declare Integer SpeedSkatingRounds for _Player;
+			SpeedSkatingRounds = 0;
+			Chrono::Create(_Player.Id);
+		}
+		default: {
+			// Others
+			Chrono::Create(_Player.Id);
+		}
+	}
+	
+	// Spawn player at discipline spawn
+	SM::SpawnPlayer(_Player, 0, SM::GetSpawn(SpawnTags[Discipline], 0));
+}
+
+// Updates score of a player depending on his performances in the different disciplines
+Void UpdatePlayerScore(CSmScore _Score) {
+	if (_Score != Null) {
+		declare Points = 0.0;
+		
+		// Ski jumping
+		declare SkiJumpRecord for _Score = -1.0;
+		if (SkiJumpRecord >= 0) {
+			if (SkiJumpRecord > G_SkiJumpRecord || G_SkiJumpRecord < 0) {
+				G_SkiJumpRecord = SkiJumpRecord;
+			}
+			declare SkiJumpingPoints = C_PointsPerDiscipline;
+			for (Index, 0, 4) {
+				SkiJumpingPoints *= (SkiJumpRecord/(1.0*G_SkiJumpRecord));
+			}
+			Points += SkiJumpingPoints;
+		}
+		
+		// Hurdles
+		declare HurdlesRecord for _Score = -1;
+		if (HurdlesRecord >= 0) {
+			if (HurdlesRecord < G_HurdlesRecord || G_HurdlesRecord < 0) {
+				G_HurdlesRecord = HurdlesRecord;
+			}
+			declare HurdlesPoints = C_PointsPerDiscipline;
+			for (Index, 0, 8) {
+				HurdlesPoints *= G_HurdlesRecord/(1.0*HurdlesRecord);
+			}
+			Points += HurdlesPoints;
+		}
+		
+		// Swimming
+		declare SwimmingRecord for _Score = -1;
+		if (SwimmingRecord >= 0) {
+			if (SwimmingRecord < G_SwimmingRecord || G_SwimmingRecord < 0) {
+				G_SwimmingRecord = SwimmingRecord;
+			}
+			declare SwimmingPoints = C_PointsPerDiscipline;
+			for (Index, 0, 7) {
+				SwimmingPoints *= G_SwimmingRecord/(1.0*SwimmingRecord);
+			}
+			Points += SwimmingPoints;
+		}
+		
+		// Sprint
+		declare SprintRecord for _Score = -1;
+		if (SprintRecord >= 0) {
+			if (SprintRecord < G_SprintRecord || G_SprintRecord < 0) {
+				G_SprintRecord = SprintRecord;
+			}
+			declare SprintPoints = C_PointsPerDiscipline;
+			for (Index, 0, 9) {
+				SprintPoints *= G_SprintRecord/(1.0*SprintRecord);
+			}
+			Points += SprintPoints;
+		}
+		
+		// Speed skating
+		declare SpeedSkatingRecord for _Score = -1;
+		if (SpeedSkatingRecord >= 0) {
+			if (SpeedSkatingRecord < G_SpeedSkatingRecord || G_SpeedSkatingRecord < 0) {
+				G_SpeedSkatingRecord = SpeedSkatingRecord;
+			}
+			declare SpeedSkatingPoints = C_PointsPerDiscipline;
+			for (Index, 0, 8) {
+				SpeedSkatingPoints *= G_SpeedSkatingRecord/(1.0*SpeedSkatingRecord);
+			}
+			Points += SpeedSkatingPoints;
+		}
+		
+		_Score.Points = MathLib::NearestInteger(Points);
+	}
+}
+
+Void UpdateAllPlayersScores() {
+	foreach (Score in Scores) {
+		UpdatePlayerScore(Score);
+	}
+}
+
+// Announces ski jump length
+Void EvaluateSkiJump(CSmPlayer _Player, Real _Distance) {
+	declare SkiJumpRecord for _Player.Score = -1.0;
+	if (_Distance > SkiJumpRecord) {
+		SkiJumpRecord = _Distance;
+		if (SkiJumpRecord > G_SkiJumpRecord || G_SkiJumpRecord < 0) {
+			G_SkiJumpRecord = SkiJumpRecord;
+		}
+		UpdateAllPlayersScores();
+		declare UI <=> UIManager.GetUI(_Player);
+		if (UI != Null) {
+			UI.SendNotice(	"""New Record: {{{SkiJumpRecord}}}m!""", CUIConfig::ENoticeLevel::MatchInfo,
+							Null, CUIConfig::EAvatarVariant::Default, CUIConfig::EUISound::Record, 1);
+		}
+	} else {
+		if (_Distance >= 5.0) {
+			declare UI <=> UIManager.GetUI(_Player);
+			if (UI != Null) {
+				UI.SendNotice(	"""Distance: {{{_Distance}}}m""", CUIConfig::ENoticeLevel::PlayerInfo,
+								Null, CUIConfig::EAvatarVariant::Default, CUIConfig::EUISound::Notice, 0);
+			}
+		}
+	}
+}
+
+// Announces hurdles time
+Void EvaluateHurdlesTime(CSmPlayer _Player, Integer _Time) {
+	declare HurdlesRecord for _Player.Score = -1;
+	if (_Time < HurdlesRecord || HurdlesRecord < 0) {
+		HurdlesRecord = _Time;
+		if (HurdlesRecord < G_HurdlesRecord || G_HurdlesRecord < 0) {
+			G_HurdlesRecord = HurdlesRecord;
+		}
+		UpdateAllPlayersScores();
+		declare UI <=> UIManager.GetUI(_Player);
+		if (UI != Null) {
+			UI.SendNotice(	"""New Record: {{{MathLib::NearestInteger(HurdlesRecord/10.0)/100.0}}}s!""", CUIConfig::ENoticeLevel::MatchInfo,
+							Null, CUIConfig::EAvatarVariant::Default, CUIConfig::EUISound::Record, 1);
+		}
+	} else {
+		declare UI <=> UIManager.GetUI(_Player);
+		if (UI != Null) {
+			UI.SendNotice(	"""Time: {{{MathLib::NearestInteger(_Time/10.0)/100.0}}}s""", CUIConfig::ENoticeLevel::PlayerInfo,
+							Null, CUIConfig::EAvatarVariant::Default, CUIConfig::EUISound::Notice, 0);
+		}
+	}
+}
+
+// Announces swimming time
+Void EvaluateSwimmingTime(CSmPlayer _Player, Integer _Time) {
+	declare SwimmingRecord for _Player.Score = -1;
+	if (_Time < SwimmingRecord || SwimmingRecord < 0) {
+		SwimmingRecord = _Time;
+		if (SwimmingRecord < G_SwimmingRecord || G_SwimmingRecord < 0) {
+			G_SwimmingRecord = SwimmingRecord;
+		}
+		UpdateAllPlayersScores();
+		declare UI <=> UIManager.GetUI(_Player);
+		if (UI != Null) {
+			UI.SendNotice(	"""New Record: {{{MathLib::NearestInteger(SwimmingRecord/10.0)/100.0}}}s!""", CUIConfig::ENoticeLevel::MatchInfo,
+							Null, CUIConfig::EAvatarVariant::Default, CUIConfig::EUISound::Record, 1);
+		}
+	} else {
+		declare UI <=> UIManager.GetUI(_Player);
+		if (UI != Null) {
+			UI.SendNotice(	"""Time: {{{MathLib::NearestInteger(_Time/10.0)/100.0}}}s""", CUIConfig::ENoticeLevel::PlayerInfo,
+							Null, CUIConfig::EAvatarVariant::Default, CUIConfig::EUISound::Notice, 0);
+		}
+	}
+}
+
+// Announces sprint time
+Void EvaluateSprintTime(CSmPlayer _Player, Integer _Time) {
+	declare SprintRecord for _Player.Score = -1;
+	if (_Time < SprintRecord || SprintRecord < 0) {
+		SprintRecord = _Time;
+		if (SprintRecord < G_SprintRecord || G_SprintRecord < 0) {
+			G_SprintRecord = SprintRecord;
+		}
+		UpdateAllPlayersScores();
+		declare UI <=> UIManager.GetUI(_Player);
+		if (UI != Null) {
+			UI.SendNotice(	"""New Record: {{{MathLib::NearestInteger(SprintRecord/10.0)/100.0}}}s!""", CUIConfig::ENoticeLevel::MatchInfo,
+							Null, CUIConfig::EAvatarVariant::Default, CUIConfig::EUISound::Record, 1);
+		}
+	} else {
+		declare UI <=> UIManager.GetUI(_Player);
+		if (UI != Null) {
+			UI.SendNotice(	"""Time: {{{MathLib::NearestInteger(_Time/10.0)/100.0}}}s""", CUIConfig::ENoticeLevel::PlayerInfo,
+							Null, CUIConfig::EAvatarVariant::Default, CUIConfig::EUISound::Notice, 0);
+		}
+	}
+}
+
+// Announces speed skating time
+Void EvaluateSpeedSkatingTime(CSmPlayer _Player, Integer _Time) {
+	declare SpeedSkatingRecord for _Player.Score = -1;
+	if (_Time < SpeedSkatingRecord || SpeedSkatingRecord < 0) {
+		SpeedSkatingRecord = _Time;
+		if (SpeedSkatingRecord < G_SpeedSkatingRecord || G_SpeedSkatingRecord < 0) {
+			G_SpeedSkatingRecord = SpeedSkatingRecord;
+		}
+		UpdateAllPlayersScores();
+		declare UI <=> UIManager.GetUI(_Player);
+		if (UI != Null) {
+			UI.SendNotice(	"""New Record: {{{MathLib::NearestInteger(SpeedSkatingRecord/10.0)/100.0}}}s!""", CUIConfig::ENoticeLevel::MatchInfo,
+							Null, CUIConfig::EAvatarVariant::Default, CUIConfig::EUISound::Record, 1);
+		}
+	} else {
+		declare UI <=> UIManager.GetUI(_Player);
+		if (UI != Null) {
+			UI.SendNotice(	"""Time: {{{MathLib::NearestInteger(_Time/10.0)/100.0}}}s""", CUIConfig::ENoticeLevel::PlayerInfo,
+							Null, CUIConfig::EAvatarVariant::Default, CUIConfig::EUISound::Notice, 0);
+		}
+	}
+}
+
+// Returns utility layer manialink
+Text GetUtilityLayerManialink() {
+	return """
+	<script><!--
+		#Include "MathLib" as MathLib
+		
+		main() {
+			declare SpeedLabel <=> (Page.GetFirstChild("SpeedLabel") as CMlLabel);
+			
+			declare netwrite Net_LobbyReset for UI = -1;
+			
+			declare LastUIUpdate = 0;
+			declare Vec3 LastPosition;
+			declare LastPositionTime = -1;
+			
+			while (True) {
+				yield;
+				
+				// Handle events
+				foreach (Event in PendingEvents) {
+					switch (Event.Type) {
+						case CMlEvent::Type::KeyPress: {
+							switch (Event.CharPressed) {
+								case "2555904": {
+									Net_LobbyReset = Now;
+								}
+							}
+						}
+					}
+				}
+				
+				// UI update
+				if (LastUIUpdate + 350 < Now) {
+					LastUIUpdate = Now;
+					
+					// Calculate speed
+					if (InputPlayer != Null && InputPlayer.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned) {
+						if (LastPositionTime >= 0) {
+							declare Speed = (MathLib::Distance(LastPosition, InputPlayer.Position)/((Now-LastPositionTime)/1000.0))*3.6;
+							Speed = MathLib::NearestInteger(Speed*100)/100.0;
+							SpeedLabel.Value = "$fff"^Speed^" km/h";
+							LastPosition = InputPlayer.Position;
+							LastPositionTime = Now;
+						} else {
+							LastPosition = InputPlayer.Position;
+							LastPositionTime = Now;
+						}
+					} else {
+						SpeedLabel.Value = "";
+					}
+				}
+			}
+		}
+	--></script>
+	<frame>
+		<label id="SpeedLabel" posn="58 -75" style="TextButtonMedium" halign="right" valign="center"/>
+	</frame>""";
+}
+
+// Updates utility layer
+Void UpdateUtilityLayer(CSmPlayer _Player, CUIConfig _UI) {
+	if (_Player != Null && _UI != Null) {
+		// Check for lobby reset
+		declare LastLobbyReset for _UI = -1;
+		declare netread Net_LobbyReset for _UI = -1;
+		if (Net_LobbyReset > 0 && LastLobbyReset != Net_LobbyReset) {
+			// Reset player to lobby
+			LastLobbyReset = Net_LobbyReset;
+			declare Integer Discipline for _Player;
+			Discipline = 0;
+			UnspawnPlayer(_Player);
+		}
+	}
+}
+
+// Create markers layer
+Text GetMarkersLayerManialink() {
+	declare Manialink = """
+	<script><!--
+		// Show/hide frame and its subcontrols
+		Void ShowFrame(CMlFrame _Frame, Boolean _Show) {
+			_Frame.Visible = _Show;
+			foreach (SubControl in _Frame.Controls) {
+				SubControl.Visible = _Show;
+			}
+		}
+		Void ShowFrames(CMlFrame[Text] _Frames, Boolean _Show) {
+			foreach (Frame in _Frames) {
+				ShowFrame(Frame, _Show);
+			}
+		}
+		
+		main() {
+			declare PortFrames =  [	"SkiJump"		=>	(Page.GetFirstChild("SkiJumpPort") as CMlFrame),
+									"Hurdles"		=>	(Page.GetFirstChild("HurdlesPort") as CMlFrame),
+									"Swimming"		=>	(Page.GetFirstChild("SwimmingPort") as CMlFrame),
+									"Sprint"		=>	(Page.GetFirstChild("SprintPort") as CMlFrame),
+									"SpeedSkating"	=>	(Page.GetFirstChild("SpeedSkatingPort") as CMlFrame)];
+			declare FinishFrames	=	[	"Hurdles"		=>	(Page.GetFirstChild("HurdlesFinish") as CMlFrame),
+											"Swimming"		=>	(Page.GetFirstChild("SwimmingFinish") as CMlFrame),
+											"Sprint"		=>	(Page.GetFirstChild("SprintFinish") as CMlFrame)];
+			declare CMlFrame[Text] SKCPFrames;""";
+	if (G_SpeedSkatingCPCount > 0) {
+		Manialink ^= """
+			SKCPFrames	=	[""";
+		for (Nb, 0, G_SpeedSkatingCPCount-1) {
+			Manialink ^= """
+				"CP{{{Nb}}}"	=>	(Page.GetFirstChild("SpeedSkatingCP{{{Nb}}}") as CMlFrame)""";
+			if (Nb < G_SpeedSkatingCPCount-1) {
+				Manialink ^= ",";
+			}
+		}
+		Manialink ^= "]";
+	}
+	Manialink ^= """			
+			declare netread Discipline for UI = 0;
+			
+			declare LastUIUpdate = 0;
+			
+			while (True) {
+				yield;
+				
+				if (LastUIUpdate + 300 < Now) {
+					LastUIUpdate = Now;
+
+					// Port markers
+					switch (Discipline) {
+						case 0: {
+							ShowFrames(PortFrames, True);
+						}
+						default: {
+							ShowFrames(PortFrames, False);
+						}
+					}
+					
+					// Disciplines markers
+					switch (Discipline) {
+						case 0: {
+							ShowFrames(FinishFrames, False);
+							ShowFrames(SKCPFrames, False);
+						}
+						case 2: {
+							ShowFrame(FinishFrames["Hurdles"], True);
+						}
+						case 3: {
+							ShowFrame(FinishFrames["Swimming"], True);
+						}
+						case 4: {
+							ShowFrame(FinishFrames["Sprint"], True);
+						}
+						case 5: {
+							ShowFrames(SKCPFrames, True);
+						}
+					}
+				}
+			}
+		}
+	--></script>
+	
+	<format textsize="1"/>
+	<frame id="SkiJumpPort" hidden="1">
+		<label text="Ski Jumping-Port" valign="center" halign="center"/>
+	</frame>
+	<frame id="HurdlesPort" hidden="1">
+		<label text="Hurdles-Port" valign="center" halign="center"/>
+	</frame>
+	<frame id="SwimmingPort" hidden="1">
+		<label text="Swimming-Port" valign="center" halign="center"/>
+	</frame>
+	<frame id="SprintPort" hidden="1">
+		<label text="Sprint-Port" valign="center" halign="center"/>
+	</frame>
+	<frame id="SpeedSkatingPort" hidden="1">
+		<label text="Speed Skating-Port" valign="center" halign="center"/>
+	</frame>
+	
+	<frame id="HurdlesFinish" hidden="1">
+		<quad sizen="7 7" style="Icons64x64_1" substyle="Finish" valign="center" halign="center"/>
+	</frame>
+	<frame id="SwimmingFinish" hidden="1">
+		<quad sizen="7 7" style="Icons64x64_1" substyle="Finish" valign="center" halign="center"/>
+	</frame>
+	<frame id="SprintFinish" hidden="1">
+		<quad sizen="7 7" style="Icons64x64_1" substyle="Finish" valign="center" halign="center"/>
+	</frame>""";
+	for (Nb, 0, G_SpeedSkatingCPCount-1) {
+		Manialink ^= """
+			<frame id="SpeedSkatingCP{{{Nb}}}" hidden="1">
+				<label text="CP" valign="center" halign="center"/>
+			</frame>""";
+	}
+	return Manialink;
+}
+
+// Creates hud3dmarkers for the current map
+Text GetHud3dMarkers() {
+	declare Markers = "";
+	
+	declare NbCP = 0;
+	declare NbCPText = "";
+	
+	foreach (Pole in BlockPoles) {
+		switch (Pole.Tag) {
+			case "SpeedSkatingCP": {
+				NbCPText = ""^NbCP;
+				NbCP += 1;
+			}
+			default: {
+				NbCPText = "";
+			}
+		}
+		Markers ^= """<marker pos="{{{Pole.Position[0]}}} {{{Pole.Position[1]+5.0}}} {{{Pole.Position[2]}}}" manialinkframeid="{{{Pole.Tag^NbCPText}}}"/>""";
+	}
+	
+	return Markers;
+}
+
+// Custom tab pane layer
+CUILayer CreateTabPaneLayer(Text[Text] TabsImages, Integer TabFramePosnX, Integer TabFramePosnY, Boolean HorizontalLayout) {
+	if(TabsImages.count <= 0) {
+		log("Error : Tab pane built with no pane inside.");
+		//assert(False);
+		return Null;
+	}
+	
+	declare CUILayer TabPaneLayer <=> UIManager.UILayerCreate();
+	declare TabLayerId = TabPaneLayer.Id;
+	
+	// Get the first tab to initialize the layer
+	declare Text FirstTabKey;
+	foreach(Key => Image in TabsImages) {
+		FirstTabKey = Key;
+		break;
+	}
+	
+	// The ManiaLink associated to the tabs
+	declare MLText = """
+		<script><!--
+		
+		main()
+		{
+			declare Text _TabsLib_CurrentTab for UI;
+			_TabsLib_CurrentTab = "{{{FirstTabKey}}}";
+			declare netread Boolean _TabsLib_UsesTabs for UI;
+			// _TabsLib_UsesTabs = True;
+
+			declare netread Text _TabsLib_ForcedTab for UI;
+			declare 		Text CurrentForcedTab   = "";
+			
+			declare netread Text _TabsLib_Blinker for UI;
+			declare netread Text _TabsLib_BlinkTab for UI;
+			declare netread Boolean _TabsLib_DoBlink for UI;
+			declare 		Boolean CurrentDoBlink = False;
+			
+			declare CMlQuad PreviousSelectingQuad	<=>(Page.GetFirstChild("{{{Tabs::GetQuadID(TabLayerId, FirstTabKey)^"_bgUnselect"}}}") as CMlQuad);
+			declare CMlQuad PreviousClickedQuad		<=>(Page.GetFirstChild("{{{Tabs::GetQuadID(TabLayerId, FirstTabKey)}}}") as CMlQuad);
+			PreviousSelectingQuad.Hide();
+			PreviousClickedQuad.Scale = 1.;
+			
+			while (True)
+			{
+				yield;
+				if (! PageIsVisible) continue;
+				
+				declare Text ClickedId = "";
+				
+				if(CurrentDoBlink != _TabsLib_DoBlink) 
+				{
+					CurrentDoBlink  = _TabsLib_DoBlink;
+					declare Text _TabsLib_CurrentTab for UI;
+					if (_TabsLib_BlinkTab != _TabsLib_CurrentTab) {
+						declare Blinker <=> (Page.GetFirstChild(_TabsLib_Blinker^"_Blink") as CMlQuad);
+						if (Blinker!=Null) Blinker.Show();
+					}
+				}
+
+				// emulate clic on a given tab
+				if(CurrentForcedTab != _TabsLib_ForcedTab) {
+					CurrentForcedTab = _TabsLib_ForcedTab;
+					ClickedId = CurrentForcedTab;
+				}
+				else {
+					foreach(Event in PendingEvents) {
+						if (Event.Type == CMlEvent::Type::MouseClick) {
+							declare Id = Event.ControlId;
+							switch(Id) {
+								""";
+								
+							foreach( Key => Image in TabsImages)
+							{
+								declare QuadId = Tabs::GetQuadID(TabLayerId, Key);
+								MLText = MLText^"""case "{{{QuadId}}}":  
+								{
+									ClickedId = Id;
+									// log("clicked: "^ClickedId);
+									break;
+								}
+								""";
+							}
+						MLText = MLText^"""
+							}
+						}
+					}
+				}
+				
+				if(ClickedId != "") 
+				{
+					switch(ClickedId) {""";
+							
+						foreach( Key => Image in TabsImages)
+						{
+							declare QuadId = Tabs::GetQuadID(TabLayerId, Key);
+							//log(Key^" : Index="^Index^", QuadId="^QuadId);
+							MLText = MLText^"""case "{{{QuadId}}}":  
+							{
+								if(_TabsLib_CurrentTab != "{{{Key}}}") {
+									_TabsLib_CurrentTab = "{{{Key}}}";
+									declare BgUnselect <=> (Page.GetFirstChild("{{{QuadId^"_bgUnselect"}}}") as CMlQuad);
+									
+									PreviousSelectingQuad.Show();
+									BgUnselect.Hide();
+									PreviousSelectingQuad = BgUnselect;
+									
+									declare Blinker <=> (Page.GetFirstChild("{{{QuadId^"_Blink"}}}") as CMlQuad);
+									if (Blinker!=Null) Blinker.Hide();
+									
+									declare ClickedQuad <=> (Page.GetFirstChild("{{{QuadId}}}") as CMlQuad);
+									ClickedQuad.Scale = 1.;
+									PreviousClickedQuad.Scale = .8;
+									PreviousClickedQuad = ClickedQuad;
+								}
+							}
+							""";
+						}
+						
+						MLText = MLText^"""
+					}
+				}
+			} // end while
+		}
+		
+		--></script>
+		<frame posn="{{{TabFramePosnX}}} {{{TabFramePosnY}}}">
+		""";
+		declare Integer XOffset 	= -155;
+		declare Integer YOffset 	= 30;
+		declare Integer IconSize 	= 15;
+		declare Integer QuadY 		= -43;
+		declare Integer QuadXPos 	= XOffset + (YOffset-IconSize);
+		declare Real BlinkerMargin 	= 1.5;
+		declare Text BorderColor	= "0000";
+		declare Real BorderSize		= 0.5;
+		
+		
+		foreach( Key => TabImage in TabsImages)
+		{
+			declare QuadId = Tabs::GetQuadID(TabLayerId, Key);			
+			MLText = MLText^"""
+				<quad id="{{{QuadId}}}" halign="center" valign="center" posn="{{{QuadXPos + (IconSize/2.)}}} {{{-QuadY - (IconSize/2.)}}} 1" scale="0.8" sizen="{{{IconSize}}} {{{IconSize}}}" """;
+			if (TextLib::SubString(TabImage, 0, 4) == "http") {
+				MLText = MLText^""" image="{{{TabImage}}}" """;
+				MLText = MLText^"""ScriptEvents="true"/>""";
+				MLText = MLText^"""
+					<quad id="{{{QuadId^"_Blink"}}}" posn="{{{QuadXPos-BlinkerMargin}}} {{{-QuadY+BlinkerMargin}}} 0"  sizen="{{{IconSize+(2*BlinkerMargin)}}} {{{IconSize+(2*BlinkerMargin)}}}" image="{{{TabImage}}}"  hidden="true" />""";
+			} else {
+				declare SubstyleIcon = TabImage;
+				if (SubstyleIcon == "") {
+					SubstyleIcon = "ChallengeAuthor";
+				}
+				MLText = MLText^""" style="Icons128x128_1" substyle="{{{SubstyleIcon}}}" """;
+				MLText = MLText^"""ScriptEvents="true"/>""";
+				MLText = MLText^"""
+					<quad id="{{{QuadId^"_Blink"}}}" posn="{{{QuadXPos-BlinkerMargin}}} {{{-QuadY+BlinkerMargin}}} 0"  sizen="{{{IconSize+(2*BlinkerMargin)}}} {{{IconSize+(2*BlinkerMargin)}}}" style="Icons128x128_Blink" substyle="{{{SubstyleIcon}}}"  hidden="true" />""";
+			}
+			
+			MLText = MLText^"""
+				<quad id="{{{QuadId}}}_bg" posn="{{{QuadXPos}}} {{{-QuadY}}} -2"  sizen="{{{IconSize}}} {{{IconSize}}}" bgcolor="{{{"0007"}}}" />""";
+			MLText = MLText^"""
+				<quad id="{{{QuadId}}}_bgUnselect" posn="{{{QuadXPos}}} {{{-QuadY}}} -2"  sizen="{{{IconSize}}} {{{IconSize}}}" bgcolor="{{{"000b"}}}" />""";
+			
+			if (HorizontalLayout) {
+				QuadXPos = QuadXPos + IconSize;
+			} else {
+				QuadY = QuadY + IconSize;
+			}
+		}
+		
+		MLText = MLText^"""
+		</frame>
+	""";
+	
+	TabPaneLayer.ManialinkPage = MLText;
+	return TabPaneLayer;
+}
+
+// Creates discipline ratings layer
+Text GetDisciplineRankingsLayer() {
+	declare Manialink = """
+		<script><!--
+			Void UpdateFrameTab(CUIConfig _UI, CMlPage _Page, Text _TabKey, CMlFrame _MainFrame) {
+				declare netread Boolean _TabsLib_UseTabs for _UI;
+				if (!_TabsLib_UseTabs) return;
+				
+				declare Boolean _TabsLib_ScoresLayerIsVisible 	for _UI;
+				declare Boolean _TabsLib_AltLayerIsVisible 		for _UI;
+				declare Text 	_TabsLib_CurrentTab 			for _UI;
+				declare netread Text _TabsLib_ScoresTableTab 	for _UI;
+				
+				declare Boolean ShowCurrentTab = _TabsLib_AltLayerIsVisible && (_TabsLib_CurrentTab == _TabKey);
+				
+				if (_TabKey == _TabsLib_ScoresTableTab) {
+					ShowCurrentTab = _TabsLib_ScoresLayerIsVisible || (_TabsLib_AltLayerIsVisible && (_TabsLib_CurrentTab == _TabsLib_ScoresTableTab));
+				}
+			
+				if (ShowCurrentTab) {
+					_MainFrame.Show();
+				} else {
+					_MainFrame.Hide();
+				}
+			}
+			
+			main() {
+				declare LastUIUpdate = 0;
+				
+				declare Text _TabsLib_CurrentTab for UI;
+				
+				declare DisciplineRankingsFrame <=> (Page.GetFirstChild("DisciplineRankingsFrame") as CMlFrame);
+				declare Rankings_Title <=> (Page.GetFirstChild("Rankings_Title") as CMlLabel);
+				
+				while (True) {
+					yield;
+					
+					if (LastUIUpdate + 300 < Now) {
+						LastUIUpdate = Now;
+						
+						switch (_TabsLib_CurrentTab) {
+							case "ScoresTab": {
+								DisciplineRankingsFrame.Hide();
+							}
+							default: {
+								Rankings_Title.Value = _TabsLib_CurrentTab;
+								UpdateFrameTab(UI, Page, _TabsLib_CurrentTab, DisciplineRankingsFrame);
+							}
+						}
+					}
+				}
+			}
+		--></script>
+		<frame id="DisciplineRankingsFrame" hidden="1">
+			<label id="Rankings_Title"/>
+		</frame>""";
+	return Manialink;
+}

@@ -1,0 +1,537 @@
+/****************************************
+*	Hiking Game Mode					*
+*	Author:		steeffeen				*
+*	Contact:	mail@steeffeen.com		*
+****************************************/
+
+#Extends "Modes/ShootMania/ModeBase.Script.txt"
+
+#Const	ScriptName			"Hiking.Script.txt"
+#Const	Version				"0.2 (2013-10-25)"
+
+#Const	CompatibleMapTypes	"MeleeArena"
+
+#Include "MathLib" as MathLib
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+#Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
+
+/****************************************
+	SETTINGS
+****************************************/
+
+#Setting	S_SendPositionData		True	as _("Send Position Data")
+//#Setting	S_ShowPOIMarkers		True	as _("Show Markers for POIs")
+
+/****************************************
+	CONSTANTS
+****************************************/
+
+#Const	C_APIValidationKey			"fgvhbjnihba32fkjn"										// Validation key for api requests
+#Const	C_APIPositionUrl			"http://api.team-devota.com/hiking/submit.php"			// Url for api position requests
+#Const	C_PositionRequestInterval	3000													// Time between position requests
+#Const	C_DummyPosition				<-1.23456789, -1.23456789, -1.23456789>					// Dummy position as default value
+
+#Const	C_MaxMarkers				50														// Max number of markers shown at once
+
+#Const	C_NbBots					0
+
+/****************************************
+	GLOBALES
+****************************************/
+
+//declare Ident	G_LayerMarkersId;			// Id of markers layer
+
+/****************************************
+	LABELS
+****************************************/
+
+***LogVersion***
+***
+MB_LogVersion(ScriptName, Version);
+MB_LogVersion(SM::GetScriptName(), SM::GetScriptVersion());
+MB_LogVersion(SpawnScreen::GetScriptName(), SpawnScreen::GetScriptVersion());
+***
+
+***Rules***
+***
+SpawnScreen::ResetRulesSection();
+
+declare ModeRules = TextLib::Compose("\n%1\n\n%2\n%3\n",
+	_("Start amazing Adventures by exploring the complete Map and reach never seen Locations."),
+	_("You can submit Points of Interests by pressing F3."),
+	""/*_("Markers show POIs that have been discovered by other Players.")*/);
+
+SpawnScreen::AddSubsection(_("Rules"), ModeRules, 5.);
+
+SpawnScreen::CreatePrettyRules("Hiking", False);
+***
+
+***StartServer***
+***
+// Set mode values
+UseClans = False;
+UseAllies = True;
+Users_SetNbFakeUsers(C_NbBots, 0);
+
+// Init values
+{
+declare netwrite Boolean Net_RequestError for Teams[0];
+Net_RequestError = False;
+}
+
+// UI
+SM::SetupDefaultVisibility();
+UIManager.UIAll.AlliesLabelsMaxCount = 10;
+UIManager.UIAll.AlliesLabelsShowGauges = CUIConfig::EVisibility::ForcedHidden;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedHidden;
+UIManager.UIAll.AltMenuNoDefaultScores = True;
+UIManager.UIAll.OverlayHideCountdown = True;
+UIManager.UIAll.OverlayHideMapInfo = True;
+
+// SpawnScreen
+SpawnScreen::SetModeName("Hiking");
+SpawnScreen::CreateMapInfo();
+SpawnScreen::CreateScores();
+---Rules---
+
+// Layers
+declare LayerExtras <=> UIManager.UILayerCreate();
+LayerExtras.ManialinkPage = GetLayerExtras();
+UIManager.UIAll.UILayers.add(LayerExtras);
+
+declare LayerPOI <=> UIManager.UILayerCreate();
+LayerPOI.ManialinkPage = GetLayerPOI();
+UIManager.UIAll.UILayers.add(LayerPOI);
+
+/*
+declare LayerMarkers <=> UIManager.UILayerCreate();
+G_LayerMarkersId = LayerMarkers.Id;
+LayerMarkers.Type = CUILayer::EUILayerType::Markers;
+LayerMarkers.ManialinkPage = GetMarkersManialink();
+if (S_ShowPOIMarkers) {
+	UIManager.UIAll.UILayers.add(LayerMarkers);
+}
+UIManager.UIAll.Hud3dMarkers = GetHud3dMarkers();
+*/
+***
+
+***StartMap***
+***
+// Prepare map
+foreach (Base in Bases) {
+	Base.Clan = 0;
+	Base.IsActive = True;
+}
+foreach (Pole in BlockPoles) {
+	Pole.Gauge.Clan = 0;
+	Pole.Gauge.ValueReal = 1.;
+	Pole.Captured = True;
+}
+
+// Start map
+StartTime = Now + 3000;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+***
+
+***PlayLoop***
+***
+// Regular actions
+CheckScriptSettings();
+CheckRequest();
+
+// Manage players
+foreach (Player in Players) {
+	switch (Player.SpawnStatus) {
+		case CSmPlayer::ESpawnStatus::NotSpawned: {
+			MySpawnPlayer(Player);
+		}
+	}
+}
+
+// Handle events
+foreach (Event in PendingEvents) {
+	switch (Event.Type) {
+		case CSmModeEvent::EType::OnPlayerRequestRespawn: {
+			PassOn(Event);
+		}
+		default: {
+			Discard(Event);
+		}
+	}
+}
+***
+
+***EndServer***
+***
+SpawnScreen::DestroyRules();
+SpawnScreen::DestroyMapInfo();
+UIManager.UILayerDestroyAll();
+***
+
+/****************************************
+	FUNCTIONS
+****************************************/
+
+// Check if a request has to be sent
+Void CheckRequest() {
+	// Check open request
+	declare RequestId for This = NullId;
+	if (Http.Requests.existskey(RequestId)) {
+		declare Request <=> Http.Requests[RequestId];
+		if (Request.IsCompleted) {
+			declare netwrite Boolean Net_RequestError for Teams[0];
+			if (Request.StatusCode != 200 || Request.Result != "Okay.") {
+				log(Now^"> Http Error: "^Request.StatusCode);
+				Net_RequestError = True;
+			} else {
+				Net_RequestError = False;
+			}
+			Http.Destroy(Request);
+		}
+	}
+	
+	// Send new request?
+	declare LastRequestTime for This = Now;
+	if (S_SendPositionData && !Http.Requests.existskey(RequestId) && Http.SlotsAvailable > 0 && Players.count > 0
+		&& LastRequestTime + C_PositionRequestInterval < Now) {
+		LastRequestTime = Now;
+		
+		// Get relevant players
+		declare DataPlayerIds = Ident[];
+		foreach (Player in Players) {
+			if (Player.SpawnStatus != CSmPlayer::ESpawnStatus::Spawned) continue;
+			DataPlayerIds.add(Player.Id);
+		}
+		
+		// Build data
+		declare Data = """{"now":{{{Now}}},""";
+		// Validation key
+		Data ^= """"validation_key":"{{{TextLib::URLEncode(C_APIValidationKey)}}}",""";
+		
+		// Positions
+		Data ^= """"positions":[""";
+		foreach (Index => PlayerId in DataPlayerIds) {
+			declare Player <=> Players[PlayerId];
+			Data ^= """{""";
+			Data ^= """"login":"{{{TextLib::URLEncode(Player.Login)}}}",""";
+			Data ^= """"nickname":"{{{TextLib::URLEncode(Player.Name)}}}",""";
+			Data ^= """"pos_x":{{{MathLib::NearestInteger(Player.Position.X)}}},""";
+			Data ^= """"pos_y":{{{MathLib::NearestInteger(Player.Position.Z)}}},""";
+			Data ^= """"pos_z":{{{MathLib::NearestInteger(Player.Position.Y)}}}""";
+			Data ^= """}""";
+			if (Index < DataPlayerIds.count - 1) {
+				Data ^= """,""";
+			}
+		}
+		Data ^= """],""";
+		
+		// POIs
+		declare POIs = Text[];
+		foreach (Index => PlayerId in DataPlayerIds) {
+			declare Player <=> Players[PlayerId];
+			declare UI <=> UIManager.GetUI(Player);
+			if (UI == Null) continue;
+			
+			declare netread Net_POIUpdated for UI = -1;
+			declare Last_Net_POIUpdated for UI = Net_POIUpdated;
+			if (Last_Net_POIUpdated == Net_POIUpdated) continue;
+			Last_Net_POIUpdated = Net_POIUpdated;
+			
+			declare netread Net_POIName for UI = "";
+			declare netread Net_POIType for UI = "";
+			declare netread Net_POIPosition for UI = C_DummyPosition;
+			
+			if (Net_POIName == "" || Net_POIType == "" || Net_POIPosition == C_DummyPosition) continue;
+			
+			Last_Net_POIUpdated = Net_POIUpdated;
+			
+			declare POIData = """{""";
+			POIData ^= """"login":"{{{TextLib::URLEncode(Player.Login)}}}",""";
+			POIData ^= """"name":"{{{TextLib::URLEncode(Net_POIName)}}}",""";
+			POIData ^= """"type":"{{{TextLib::URLEncode(Net_POIType)}}}",""";
+			POIData ^= """"pos_x":{{{MathLib::NearestInteger(Net_POIPosition.X)}}},""";
+			POIData ^= """"pos_y":{{{MathLib::NearestInteger(Net_POIPosition.Z)}}},""";
+			POIData ^= """"pos_z":{{{MathLib::NearestInteger(Net_POIPosition.Y)}}}""";
+			POIData ^= """}""";
+			POIs.add(POIData);
+			
+			declare netwrite Integer Net_ResetTime for UI;
+			Net_ResetTime = Now;
+		}
+		Data ^= """"pois":[""";
+		foreach (Index => POIData in POIs) {
+			Data ^= POIData;
+			if (Index < POIs.count - 1) {
+				Data ^= """,""";
+			}
+		}
+		Data ^= """]""";
+		
+		// Close data
+		Data ^= """}""";
+		
+		// Start request
+		declare Request <=> Http.CreatePost(C_APIPositionUrl, Data);
+		RequestId = Request.Id;
+	}
+}
+
+// Spawn the given player
+Void MySpawnPlayer(CSmPlayer _Player) {
+	if (_Player == Null) return;
+	UnspawnPlayer(_Player);
+	if (_Player.SpawnStatus != CSmPlayer::ESpawnStatus::NotSpawned) return;
+	if (_Player.RequestsSpectate) return;
+	
+	// Find spawn
+	declare SpawnIndex = MathLib::Rand(0, BlockSpawns.count-1);
+	if (!BlockSpawns.existskey(SpawnIndex)) return;
+	declare Spawn <=> BlockSpawns[SpawnIndex];
+	
+	// Spawn player
+	SM::SpawnPlayer(_Player, 0, Spawn, Now + 3000);
+}
+
+// Build position manialink
+Text GetLayerExtras() {
+	declare Manialink = """<script><!--
+		#Include "MathLib" as MathLib
+		
+		main() {
+			wait(InputPlayer != Null && Page != Null);
+			
+			declare Quad_RequestError <=> (Page.GetFirstChild("Quad_RequestError") as CMlQuad);
+			declare Label_PosX <=> (Page.GetFirstChild("Label_PosX") as CMlLabel);
+			declare Label_PosY <=> (Page.GetFirstChild("Label_PosY") as CMlLabel);
+			declare Label_PosZ <=> (Page.GetFirstChild("Label_PosZ") as CMlLabel);
+			
+			declare netread Net_RequestError for Teams[0] = False;
+			declare Last_ShowRequestError = Now;
+			
+			declare LastUIUpdate = 0;
+			
+			while (True) {
+				yield;
+				
+				if (LastUIUpdate + 250 > Now) continue;
+				LastUIUpdate = Now;
+				
+				declare LocalPlayer <=> InputPlayer;
+				if (GUIPlayer != LocalPlayer && GUIPlayer != Null) LocalPlayer <=> GUIPlayer;
+				
+				Quad_RequestError.Visible = Net_RequestError && Last_ShowRequestError >= Now;
+				if (Net_RequestError && Last_ShowRequestError < Now - 100) Last_ShowRequestError = Now + 1500;
+				
+				Label_PosX.Value = MathLib::NearestInteger(LocalPlayer.Position.X)^" : X";
+				Label_PosY.Value = MathLib::NearestInteger(LocalPlayer.Position.Z)^" : Y";
+				Label_PosZ.Value = MathLib::NearestInteger(LocalPlayer.Position.Y)^" : Z";
+			}
+		}
+		--></script>
+		<playerlist posn="160 88" scale="0.8" substyle="Small" lines="50" columns="1" team="0" status="Playing" halign="right" valign="top"/>
+		<frame id="Frame_Data" posn="159 -68">
+			<quad id="Quad_RequestError" posn="0 0" sizen="8 8" style="UIConstruction_Buttons" substyle="Validate_Step1" hidden="1"
+				halign="right" valign="center2"/>
+			<label id="Label_PosX" posn="0 -9" style="TextTitle1" textsize="2" halign="right" valign="center2"/>
+			<label id="Label_PosY" posn="0 -14" style="TextTitle1" textsize="2" halign="right" valign="center2"/>
+			<label id="Label_PosZ" posn="0 -19" style="TextTitle1" textsize="2" halign="right" valign="center2"/>
+		</frame>""";
+	return Manialink;
+}
+
+// Build poi manialink
+Text GetLayerPOI() {
+	declare Manialink = """<script><!--
+		#Include "TextLib" as TextLib
+		
+		#Const	C_POITypes	[	"Sight", "Mountain Peak", "Hole", "Bug", "Map Edge", "Other"	]
+		
+		main() {
+			wait(InputPlayer != Null && Page != Null);
+			
+			declare Frame_POI <=> (Page.GetFirstChild("Frame_POI") as CMlFrame);
+			declare Entry_Name <=> (Frame_POI.GetFirstChild("Entry_Name") as CMlEntry);
+			declare Label_Type <=> (Frame_POI.GetFirstChild("Label_Type") as CMlLabel);
+			
+			declare netread Net_ResetTime for UI = 0;
+			declare Last_Net_ResetTime = Net_ResetTime - 1;
+			
+			declare LastUIUpdate = 0;
+			
+			while (True) {
+				yield;
+				
+				foreach (Event in PendingEvents) {
+					switch (Event.Type) {
+						case CMlEvent::Type::KeyPress: {
+							switch (Event.KeyName) {
+								case "F3": {
+									Frame_POI.Visible = !Frame_POI.Visible;
+								}
+							}
+						}
+						case CMlEvent::Type::MouseClick: {
+							switch (Event.ControlId) {
+								case "Label_Cancel": {
+									Frame_POI.Visible = False;
+									Last_Net_ResetTime -= 1;
+								}
+								case "Label_Type": {
+									declare LastTypeIndex for Label_Type = -1;
+									LastTypeIndex += 1;
+									if (!C_POITypes.existskey(LastTypeIndex)) LastTypeIndex = 0;
+									Label_Type.Value = C_POITypes[LastTypeIndex];
+								}
+								case "Label_Okay": {
+									if (InputPlayer.SpawnStatus != CSmPlayer::ESpawnStatus::Spawned || !InputPlayer.IsTouchingGround) {
+										PlayUiSound(CMlScriptIngame::EUISound::ScoreProgress, 0, 1.);
+										continue;
+									}
+									
+									declare Name = Entry_Name.Value;
+									if (TextLib::Length(Name) < 3) {
+										PlayUiSound(CMlScriptIngame::EUISound::ScoreProgress, 0, 1.);
+										continue;
+									}
+									
+									declare LastTypeIndex for Label_Type = 0;
+									if (!C_POITypes.existskey(LastTypeIndex)) {
+										PlayUiSound(CMlScriptIngame::EUISound::ScoreProgress, 0, 1.);
+										continue;
+									}
+									declare Type = C_POITypes[LastTypeIndex];
+
+									declare Position = InputPlayer.Position;
+									
+									declare netwrite Integer Net_POIUpdated for UI;
+									declare netwrite Text Net_POIName for UI;
+									declare netwrite Text Net_POIType for UI;
+									declare netwrite Vec3 Net_POIPosition for UI;
+									
+									Net_POIUpdated = Now;
+									Net_POIName = Name;
+									Net_POIType = Type;
+									Net_POIPosition = Position;
+									
+									Frame_POI.Visible = False;
+								}
+							}
+						}
+					}
+				}
+				
+				if (LastUIUpdate + 250 > Now) continue;
+				LastUIUpdate = Now;
+				
+				if (Last_Net_ResetTime != Net_ResetTime) {
+					Last_Net_ResetTime = Net_ResetTime;
+					
+					Entry_Name.Value = "";
+					Label_Type.Value = _("Click here to choose Type.");
+					declare Integer LastTypeIndex for Label_Type;
+					LastTypeIndex = -1;
+				}
+			}
+		}
+		--></script>
+		<frame id="Frame_POI" hidden="1">
+			<quad sizen="130 80" style="EnergyBar" substyle="EnergyBar"  halign="center" valign="center2"/>
+			<label posn="0 31" style="TextTitle1" textsize="5" translate="1" text="|Point of Interest|POI" halign="center" valign="center2"/>
+			
+			<label posn="-50 10" style="TextTitle1" translate="1" text="Name" halign="left" valign="center2"/>
+			<entry id="Entry_Name" posn="-20 10" sizen="70 6" scriptevents="1" halign="left" valign="center2"/>
+			
+			<label posn="-50 -8" style="TextTitle1" translate="1" text="Type" halign="left" valign="center2"/>
+			<label id="Label_Type" posn="-20 -8" sizen="70 6" translate="1" scriptevents="1" halign="left" valign="center2"/>
+			
+			<label id="Label_Okay" posn="-3 -30" style="CardButtonMediumXL" translate="1" text="Okay" scriptevents="1" halign="right" valign="center2"/>
+			<label id="Label_Cancel" posn="3 -30" style="CardButtonMediumXL" translate="1" text="Cancel" scriptevents="1" halign="left" valign="center2"/>
+		</frame>""";
+	return Manialink;
+}
+
+// Check for updates of script settings
+Void CheckScriptSettings() {
+
+	// Check for showing POI markers
+	/*declare Old_S_ShowPOIMarkers for This = S_ShowPOIMarkers;
+	if (Old_S_ShowPOIMarkers != S_ShowPOIMarkers) {
+		Old_S_ShowPOIMarkers = S_ShowPOIMarkers;
+		
+		if (UIManager.UILayers.existskey(G_LayerMarkersId)) {
+			declare Layer <=> UIManager.UILayers[G_LayerMarkersId];
+			if (S_ShowPOIMarkers) {
+				// Add markers layer
+				if (!UIManager.UIAll.UILayers.exists(Layer)) {
+					UIManager.UIAll.UILayers.add(Layer);
+				}
+			} else {
+				// Remove markers layer
+				if (UIManager.UIAll.UILayers.exists(Layer)) {
+					declare Temp = UIManager.UIAll.UILayers.add(Layer);
+				}
+			}
+		}
+	}*/
+	
+}
+
+// Build hud3dmarkers
+Text GetHud3dMarkers() {
+	declare Markers = "";
+	
+	for (Index, 1, C_MaxMarkers) {
+		Markers ^= """<marker manialinkframeid="Frame_POI_{{{Index}}}" visiblity="WhenInFrustum"/>""";
+	}
+	
+	return Markers;
+}
+
+// Build manialink for markers layer
+Text GetMarkersManialink() {
+	declare Manialink = """<script><!--
+		main() {
+			wait(InputPlayer != Null && Page != Null);
+			
+			declare Index = 1;
+			
+			declare LastMarkersUpdate = -1;
+			
+			while (True) {
+				yield;
+				
+				if (LastMarkersUpdate + 1000 > Now) continue;
+				LastMarkersUpdate = Now;
+				
+				declare LocalPlayer <=> InputPlayer;
+				if (GUIPlayer != LocalPlayer && GUIPlayer != Null) LocalPlayer <=> GUIPlayer;
+				
+				declare Frame_POI <=> (Page.GetFirstChild("Frame_POI_"^Index) as CMlFrame);
+				if (Frame_POI == Null) continue;
+				Index += 1;
+				
+				Frame_POI.PosnX = LocalPlayer.Position.X;
+				Frame_POI.PosnY = LocalPlayer.Position.Y;
+				Frame_POI.PosnZ = LocalPlayer.Position.Z;
+				
+				declare Frame_Content <=> (Frame_POI.GetFirstChild("Frame_Content") as CMlFrame);
+				Frame_Content.Visible = True;
+				
+				log(Index);
+			}
+		}
+		--></script>
+		<framemodel id="FrameModel_POI">
+			<frame id="Frame_Content" hidden="1">
+				<quad id="Quad_Background" sizen="20 8" style="Bgs1InRace" substyle="BgTitle3" halign="center" valign="center2"/>
+				<label id="Label_Title" style="TextTitle1" text="test" halign="center" valign="center2"/>
+			</frame>
+		</framemodel>""";
+	
+	for (Index, 1, C_MaxMarkers) {
+		Manialink ^= """<frameinstance id="Frame_POI_{{{Index}}}" modelid="FrameModel_POI" hidden="1"/>""";
+	}
+	
+	return Manialink;
+}

@@ -1,0 +1,420 @@
+/* -------------------------------- */
+//	GoldenDunk MapType				//
+//	Author: steeffeen				//
+//	Contact: schteffens@gmail.com	//
+/* -------------------------------- */
+
+#RequireContext CSmMapType
+
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Anchor.Script.txt" as Anchor
+
+#Const Version	"0.1 (2013-02-03)"
+
+declare Text[Integer] G_HoopCenterPositions;
+declare Text[Ident] G_HoopCenterXPositions;
+declare Text[Ident] G_HoopCenterZPositions;
+
+// Parse positions string to array
+Void ParsePositionsString() {
+	declare String = Map.ObjectiveTextAuthor;
+	declare Begin = 0;
+	declare Order = -1;
+	declare XPosi = "-0.0";
+	declare ZPosi = "-0.0";
+	
+	for (Index, 0, TextLib::Length(String)) {
+		declare Char = TextLib::SubString(String, Index, 1);
+		switch (Char) {
+			case ":": {
+				Order = TextLib::ToInteger(TextLib::SubString(String, Begin, Index-Begin));
+				Begin = Index+1;
+			}
+			case ",": {
+				XPosi = TextLib::SubString(String, Begin, Index-Begin);
+				Begin = Index+1;
+			}
+			case ";": {
+				ZPosi = TextLib::SubString(String, Begin, Index-Begin);
+				Begin = Index+1;
+				
+				G_HoopCenterPositions[Order] = XPosi^","^ZPosi;
+				foreach (Anchor in AnchorData) {
+					switch (Anchor.Tag) {
+						case "Spawn": {
+							if (Anchor.Order == Order) {
+								G_HoopCenterXPositions[Anchor.Id] = XPosi;
+								G_HoopCenterZPositions[Anchor.Id] = ZPosi;
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// Builds positions string out of center positions and saves it
+Void SavePositionsString() {
+	declare String = "";
+	foreach (Order => Posi in G_HoopCenterPositions) {
+		String ^= Order^":"^Posi^";";
+	}
+	Map.ObjectiveTextAuthor = String;
+}
+
+// Initializes/Updates values of anchordata
+Void UpdateValues() {
+	foreach (Anchor in AnchorData) {
+		switch (Anchor.DefaultTag) {
+			case "Goal": {
+				switch (Anchor.Tag) {
+					case "Balls": {
+						Anchor.Order = Anchor.DefaultOrder;
+					}
+					case "Command Post": {
+						if (Anchor.Order != 1 && Anchor.Order != 2) {
+							Anchor.Order = 1;
+						}
+					}
+					default: {
+						Anchor.Tag = "Balls";
+						Anchor.Order = Anchor.DefaultOrder;
+					}
+				}
+			}
+			case "Spawn": {
+				Anchor.Tag = Anchor.DefaultTag;
+				if (Anchor.Order != 1 && Anchor.Order != 2) {
+					Anchor.Order = 1;
+				}
+			}
+		}
+	}
+}
+
+// Check if the map is valid
+Void UpdateValidability() {
+	ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+	UpdateValues();
+	Anchor::UpdateAnchorCounts();
+	
+	for (I, 1, 2) {
+		// Check spawn count
+		if (!Anchor::HasExactlyOneAnchor("Spawn", I, TextLib::Compose(_("You must place exactly one Spawn #%1"), TextLib::ToText(I)))) {
+			return;
+		}
+		
+		// Check if hoop locations are set
+		if (!G_HoopCenterPositions.existskey(I) || G_HoopCenterPositions[I] == "0.0,0.0") {
+			ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+			ValidabilityRequirementsMessage = _("You must set the Hoop Center Position of each spawn.");
+			return;
+		}
+		
+		// Check if both teams have an even amount of command posts (not more than 1)
+		declare PostCount1 = 0;
+		declare PostCount2 = 0;
+		foreach (Anchor in AnchorData) {
+			switch (Anchor.Tag) {
+				case "Command Post": {
+					switch (Anchor.Order) {
+						case 1: {
+							PostCount1 += 1;
+						}
+						case 2: {
+							PostCount2 += 1;
+						}
+					}
+				}
+			}
+		}
+		if (PostCount1 > 1 || PostCount2 > 1) {
+			// Too many command posts
+			ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+			ValidabilityRequirementsMessage = _("Each team can only have one command post.");
+			return;
+		} else {
+			if (PostCount1 != PostCount2) {
+				// Uneven amounts of command posts
+				ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+				ValidabilityRequirementsMessage = _("Each or no team must have a command post.");
+				return;
+			}
+		}
+	}
+	
+	// Check ball spawns
+	if (!Anchor::HasAtLeastOneAnchor("Balls", 0, _("You must place at least on Goal for Balls."))) {
+		return;
+	}
+	
+	ValidationStatus = CSmMapType::ValidationStatus::Validated;
+	SavePositionsString();
+}
+
+// Edit spawn blocks
+Void EditSpawnAnchor(Ident _AnchorId) {
+	declare AnchorOrder for ManialinkPage = -1;
+	declare HoopCenterXPosition for ManialinkPage = "0.0";
+	HoopCenterXPosition = "0.0";
+	declare HoopCenterZPosition for ManialinkPage = "0.0";
+	HoopCenterZPosition = "0.0";
+	declare Finish for ManialinkPage = False;
+	declare Save for ManialinkPage = False;
+	
+	AnchorOrder = AnchorData[_AnchorId].Order;
+	if (G_HoopCenterXPositions.existskey(_AnchorId)) {
+		HoopCenterXPosition = G_HoopCenterXPositions[_AnchorId];
+	}
+	if (G_HoopCenterZPositions.existskey(_AnchorId)) {
+		HoopCenterZPosition = G_HoopCenterZPositions[_AnchorId];
+	}
+	Finish = False;
+	Save = False;
+	
+	ManialinkText = """
+	<script><!--
+		#Include "TextLib" as TextLib
+		
+		main() {
+			declare Buttons = [	(Page.GetFirstChild("1") as CMlLabel),
+								(Page.GetFirstChild("2") as CMlLabel)];
+			declare XEntry = (Page.GetFirstChild("X") as CMlEntry);
+			declare ZEntry = (Page.GetFirstChild("Z") as CMlEntry);
+			
+			declare AnchorOrder for Page = -1;
+			declare HoopCenterXPosition for Page = "";
+			declare HoopCenterZPosition for Page = "";
+			declare Finish for Page = False;
+			declare Save for Page = False;
+			
+			XEntry.Value = HoopCenterXPosition;
+			ZEntry.Value = HoopCenterZPosition;
+			
+			while (!Finish) {
+				yield;
+				
+				foreach (Button in Buttons) {
+					if (AnchorOrder == TextLib::ToInteger(Button.ControlId)) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				foreach (Event in PendingEvents) {
+					switch (Event.Type) {
+						case CMlEvent::Type::MouseClick: {
+							switch (Event.ControlId) {
+								case "Cancel": {
+									Finish = True;
+								}
+								case "Okay": {
+									HoopCenterXPosition = XEntry.Value;
+									HoopCenterZPosition = ZEntry.Value;
+									Save = True;
+									Finish = True;
+								}
+								default: {
+									AnchorOrder = TextLib::ToInteger(Event.ControlId);
+								}
+							}
+						}	
+					}
+				}
+			}
+		}			
+	--></script>
+	<frame posn="110 50 99">
+		<quad posn="0 0 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<quad posn="0 0 -1" sizen="70 50" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="Edit Spawn #{{{AnchorOrder}}}"/>
+		
+		<frame posn="0 -4">
+			<label id="1" posn="-6 0" scale="2.5" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="2" posn="6 0" scale="2.5" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+		</frame>
+		
+		<label posn="0 -18" halign="center" valign="center" text="$000Hoop Center Position"/>
+		<label posn="-25 -24.5" halign="center" valign="center" text="$000X"/>
+		<entry id="X" posn="-14 -25" sizen="16 5" halign="center" valign="center" default="0.0"/>
+		<label posn="3 -24.5" halign="center" valign="center" text="$000Z"/>
+		<entry id="Z" posn="14 -25" sizen="16 5" halign="center" valign="center" default="0.0"/>
+		
+		<label id="Okay" text="Okay" posn="0 -32" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+		<label id="Cancel" text="Cancel" posn="0 -40" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+		
+		<quad posn="0 -50" sizen="70 27" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<label posn="-32 -53" sizen="90 27" scale="0.7" halign="left" valign="top" text="$000
+1. Assign the team of the spawn.
+		
+2. Set the center coordinates of the target
+	hoop at which the team has to score.
+	(Use the CursorCoords plugin
+	to get the coordinates.)"/>
+    </frame>""";
+	
+	while (!Finish) {
+		yield;
+	}
+	
+	ManialinkText = "";
+	if (Save) {
+		AnchorData[_AnchorId].Order = AnchorOrder;
+		G_HoopCenterXPositions[_AnchorId] = HoopCenterXPosition;
+		G_HoopCenterZPositions[_AnchorId] = HoopCenterZPosition;
+		G_HoopCenterPositions[AnchorOrder] = HoopCenterXPosition^","^HoopCenterZPosition;
+	}
+}
+
+// Edit goal blocks
+Void EditGoalAnchor(Ident _AnchorId) {
+	declare AnchorOrder for ManialinkPage = -1;
+	declare AnchorTag for ManialinkPage = "";
+	declare Finish for ManialinkPage = False;
+	declare Save for ManialinkPage = False;
+	
+	AnchorOrder = AnchorData[_AnchorId].Order;
+	AnchorTag = AnchorData[_AnchorId].Tag;
+	Finish = False;
+	Save = False;
+	
+	declare EditText = "Edit "^AnchorTag;
+	if (AnchorOrder > 0) {
+		EditText ^= " #"^AnchorOrder;
+	}
+	
+	ManialinkText = """
+	<script><!--
+		#Include "TextLib" as TextLib
+		
+		main() {
+			declare TypeButtons = [	(Page.GetFirstChild("Balls") as CMlLabel),
+									(Page.GetFirstChild("Command Post") as CMlLabel)];
+			declare TeamButtons = [	(Page.GetFirstChild("1") as CMlLabel),
+									(Page.GetFirstChild("2") as CMlLabel)];
+			
+			declare AnchorOrder for Page = -1;
+			declare AnchorTag for Page = "";
+			declare Finish for Page = False;
+			declare Save for Page = False;
+			
+			while (!Finish) {
+				yield;
+				
+				foreach (Button in TypeButtons) {
+					if (AnchorTag == Button.ControlId) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				foreach (Button in TeamButtons) {
+					if (AnchorTag == "Balls") {
+						Button.Hide();
+					} else {
+						Button.Show();
+						if (AnchorOrder == TextLib::ToInteger(Button.ControlId)) {
+							Button.Value = "$4b4"^Button.ControlId;
+						} else {
+							Button.Value = "$fff"^Button.ControlId;
+						}
+					}
+				}
+				
+				foreach (Event in PendingEvents) {
+					switch (Event.Type) {
+						case CMlEvent::Type::MouseClick: {
+							switch (Event.ControlId) {
+								case "Cancel": {
+									Finish = True;
+								}
+								case "Okay": {
+									Save = True;
+									Finish = True;
+								}
+								case "1": {
+									AnchorOrder = TextLib::ToInteger(Event.ControlId);
+								}
+								case "2": {
+									AnchorOrder = TextLib::ToInteger(Event.ControlId);
+								}
+								default: {
+									AnchorTag = Event.ControlId;
+								}
+							}
+						}	
+					}
+				}
+			}
+		}			
+	--></script>
+	<frame posn="110 50 99">
+		<quad posn="0 0 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<quad posn="0 0 -1" sizen="70 48" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="{{{EditText}}}"/>
+		
+		<frame posn="0 -4">
+			<label id="Balls" posn="0 0" scale="1.5" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="Command Post" posn="0 -7" scale="1.5" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+		</frame>
+		
+		<frame posn="0 -20">
+			<label id="1" posn="-6 0" scale="2.0" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="2" posn="6 0" scale="2.0" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+		</frame>
+		
+		<label id="Okay" text="Okay" posn="0 -30" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+		<label id="Cancel" text="Cancel" posn="0 -38" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+		
+		<quad posn="0 -48" sizen="70 21" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<label posn="-32 -51" sizen="90 21" scale="0.7" halign="left" valign="top" text="$000
+1. Set the type of the goal.
+	(Balls spawn or command post.)
+		
+2. If command post: Assign a team."/>
+    </frame>""";
+	
+	while (!Finish) {
+		yield;
+	}
+	
+	ManialinkText = "";
+	if (Save) {
+		AnchorData[_AnchorId].Order = AnchorOrder;
+		AnchorData[_AnchorId].Tag = AnchorTag;
+	}
+}
+
+// Main
+main() {
+	CustomEditAnchorData = True;
+	ParsePositionsString();
+	UpdateValidability();
+	
+	while (True) {
+		yield;
+		
+		ManialinkText = "";
+		foreach (Event in PendingEvents) {
+			switch (Event.Type) {
+				case CPluginEvent::Type::MapModified: {
+					UpdateValidability();
+				}
+				case CPluginEvent::Type::EditAnchor: {
+					switch (AnchorData[Event.EditedAnchorDataId].DefaultTag) {
+						case "Spawn": {
+							EditSpawnAnchor(Event.EditedAnchorDataId);
+						}
+						case "Goal": {
+							EditGoalAnchor(Event.EditedAnchorDataId);
+						}
+					}
+					UpdateValidability();
+				}
+			}
+		}		
+	}	
+}

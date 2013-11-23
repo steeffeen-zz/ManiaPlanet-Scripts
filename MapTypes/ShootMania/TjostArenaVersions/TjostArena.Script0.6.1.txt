@@ -1,0 +1,459 @@
+/********************************************
+*	MapType for Tjost						*
+*	Author:		steeffeen					*
+*	Contact:	steeffeen@team-devota.com	*
+********************************************/
+
+#RequireContext CSmMapType
+
+#Const	Version	"0.6.1 (2013-10-02)"
+
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Anchor.Script.txt" as Anchor
+
+/********************************************
+	CONSTANTS
+********************************************/
+
+#Const	C_DefaultCampRange		25.			// Default value for the camp zone range
+
+/********************************************
+	FUNCTIONS
+********************************************/
+
+// Check if the map is valid
+Void UpdateValidability() {
+	ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+	Anchor::UpdateAnchorCounts();
+	
+	// Check for needed spawns and goals
+	for (I, 1, 2) {
+		if (!Anchor::HasExactlyOneAnchor("Goal", I, TextLib::Compose(_("You must place exactly one Goal #%1!"), TextLib::ToText(I)))) {
+			return;
+		}
+		if (!Anchor::HasExactlyOneAnchor("Spawn", I, TextLib::Compose(_("You must place exactly one Spawn #%1!"), TextLib::ToText(I)))) {
+			return;
+		}
+	}
+	
+	// Check for balanced camps
+	declare CampCounts = Integer[Integer];
+	foreach (Anchor in AnchorData) {
+		if (Anchor.Tag != "Camp") continue;
+		if (!CampCounts.existskey(Anchor.Order)) {
+			CampCounts[Anchor.Order] = 1;
+		} else {
+			CampCounts[Anchor.Order] += 1;
+		}
+	}
+	for (Clan, 1, 2) {
+		if (!CampCounts.existskey(Clan)) continue;
+		if (CampCounts.existskey(3-Clan) && CampCounts[Clan] == CampCounts[3-Clan]) continue;
+		ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+		ValidabilityRequirementsMessage = _("Both Teams must have the same number of Camps!");
+		return;
+	}
+	
+	// Check for unused spawns and goals
+	foreach (Anchor in AnchorData) {
+		if (Anchor.Tag == "Spawn" && (Anchor.Order >= 1 || Anchor.Order <= 2)) continue;
+		if (Anchor.Tag == "Goal" && (Anchor.Order >= 1 || Anchor.Order <= 2)) continue;
+		if (Anchor.Tag == "Camp" && (Anchor.Order >= 0 || Anchor.Order <= 2)) continue;
+		ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+		ValidabilityRequirementsMessage = TextLib::Compose(_("You have at least one unused %1!"), Anchor.Tag);
+		return;
+	}
+	
+	ValidationStatus = CSmMapType::ValidationStatus::Validated;
+	ValidabilityRequirementsMessage = "";
+}
+
+// Return the manialink for spawn anchor edition
+Text EditSpawnAnchorManialink() {
+	declare Rules = TextLib::Compose("%1\n\n%2\n%3",
+		_("You must place $<$e70exactly one of each$> Spawn!"),
+		_("Spawn $<$00f#1$> captures at Goal $<$00f#1$>!"),
+		_("Spawn $<$f00#2$> captures at Goal $<$f00#2$>!"));
+	
+	declare Manialink = """<script><!--
+		#Include "MathLib" as MathLib
+		#Include "TextLib" as TextLib
+		
+		main() {
+			declare Buttons = [	(Page.GetFirstChild("1") as CMlLabel), 
+								(Page.GetFirstChild("2") as CMlLabel)];
+			
+			declare Text AnchorTag for Page;
+			declare Integer AnchorOrder for Page;
+			declare Integer Finish for Page;
+			Finish = 0;
+			
+			while (Finish == 0) {
+				yield;
+				
+				foreach (Button in Buttons) {
+					if (AnchorOrder == TextLib::ToInteger(Button.ControlId) || AnchorTag == Button.ControlId) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				foreach (Event in PendingEvents) {
+					switch(Event.Type){
+						case CMlEvent::Type::MouseClick : {
+							switch (Event.ControlId) {
+								case "Cancel": {
+									Finish = -1;
+								}
+								default: {
+									declare Order = TextLib::ToInteger(Event.ControlId);
+									if (Order < 0) continue;
+									AnchorTag = "Spawn";
+									AnchorOrder = Order;
+									Finish = 1;
+								}
+							}
+						}	
+					}
+				}
+			}
+		}			
+		--></script>
+		<frame posn="120 40">
+			<quad posn="0 7 2" sizen="72 15" style="Bgs1InRace" substyle="BgTitle3_5" halign="center" valign="center2"/>
+			<label posn="0 7 3" style="TextTitle3" textsize="4" textprefix="$fff" translate="1" text="Edit Spawn" halign="center" valign="center2"/>
+			
+			<frame posn="0 -12">
+				<quad posn="0 13 -1" sizen="68 25" style="Bgs1" substyle="BgWindow2" halign="center" valign="top"/>
+				<label id="1" posn="-5 4" scale="2.5" style="TextButtonMedium" scriptevents="1" halign="right" valign="center2"/>
+				<label id="2" posn="5 4" scale="2.5" style="TextButtonMedium" scriptevents="1" halign="left" valign="center2"/>
+				<label id="Cancel" posn="0 -6" style="CardButtonSmall" translate="1" text="Cancel" scriptevents="1" halign="center" valign="center2"/>
+			</frame>
+		</frame>
+		<frame posn="120 0">
+			<quad posn="0 6 2" sizen="72 15" style="Bgs1InRace" substyle="BgTitle3_5" halign="center" valign="center2"/>
+			<label posn="0 6 3" style="TextTitle3" textsize="3" textprefix="$fff" translate="1" text="Rules" halign="center" valign="center2"/>
+			
+			<quad posn="0 0 -2" sizen="68 24" style="Bgs1" substyle="BgWindow2" halign="center" valign="top"/>
+			<label posn="-30 -3 -1" sizen="60 5" autonewline="1" style="TextCardSmallScores2" textprefix="$333" translate="1" text="{{{Rules}}}"
+				halign="left" valign="top"/>
+		</frame>""";
+	return Manialink;
+}
+
+// Return the manialink for goal anchor edition
+Text EditGoalAnchorManialink() {
+	declare Rules = TextLib::Compose("%1\n\n%2\n%3\n\n%4",
+		_("You must place $<$e70exactly one of each$> Goal!"),
+		_("Spawn $<$00f#1$> captures at Goal $<$00f#1$>!"),
+		_("Spawn $<$f00#2$> captures at Goal $<$f00#2$>!"),
+		_("Camps add additional Camp Zones for the specific Team! (0 => both Teams)"));
+	
+	declare Manialink = """<script><!--
+		#Include "MathLib" as MathLib
+		#Include "TextLib" as TextLib
+		
+		main() {
+			declare TagButtons = [		(Page.GetFirstChild("Goal") as CMlLabel),
+										(Page.GetFirstChild("Camp") as CMlLabel)];
+			declare OrderButtons = [	(Page.GetFirstChild("0") as CMlLabel),
+										(Page.GetFirstChild("1") as CMlLabel),
+										(Page.GetFirstChild("2") as CMlLabel)];
+			
+			declare Text AnchorTag for Page;
+			declare Integer AnchorOrder for Page;
+			declare Integer Finish for Page;
+			Finish = 0;
+			
+			while (Finish == 0) {
+				yield;
+				
+				foreach (Button in TagButtons) {
+					if (AnchorTag == Button.ControlId) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				foreach (Button in OrderButtons) {
+					if (AnchorOrder == TextLib::ToInteger(Button.ControlId)) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				OrderButtons[0].Visible = (AnchorTag != "Goal");
+				
+				foreach (Event in PendingEvents) {
+					switch (Event.Type){
+						case CMlEvent::Type::MouseClick : {
+							switch (Event.ControlId) {
+								case "Cancel": {
+									Finish = -1;
+								}
+								default: {
+									declare Order = TextLib::ToInteger(Event.ControlId);
+									if (Order < 0) {
+										AnchorTag = Event.ControlId;
+									} else {
+										AnchorOrder = Order;
+										Finish = 1;
+									}
+								}
+							}
+						}	
+					}
+				}
+			}
+		}			
+		--></script>
+		<frame posn="120 40">
+			<quad posn="0 7 2" sizen="72 15" style="Bgs1InRace" substyle="BgTitle3_5" halign="center" valign="center2"/>
+			<label posn="0 7 3" style="TextTitle3" textsize="4" textprefix="$fff" translate="1" text="Edit Goal" halign="center" valign="center2"/>
+			
+			<frame posn="0 -12">
+				<quad posn="0 13 -1" sizen="68 30" style="Bgs1" substyle="BgWindow2" halign="center" valign="top"/>
+				<label id="Goal" posn="-2 7" textsize="3" style="TextButtonMedium" scriptevents="1" halign="right" valign="center2"/>
+				<label id="Camp" posn="2 7" textsize="3" style="TextButtonMedium" scriptevents="1" halign="left" valign="center2"/>
+				<label id="1" posn="-9 -2" textsize="7" style="TextButtonMedium" scriptevents="1" halign="right" valign="center2"/>
+				<label id="0" posn="0 -2" textsize="7" style="TextButtonMedium" scriptevents="1" halign="center" valign="center2"/>
+				<label id="2" posn="9 -2" textsize="7" style="TextButtonMedium" scriptevents="1" halign="left" valign="center2"/>
+				<label id="Cancel" posn="0 -11" style="CardButtonSmall" translate="1" text="Cancel" scriptevents="1" halign="center" valign="center2"/>
+			</frame>
+	    </frame>
+		<frame posn="120 -5">
+			<quad posn="0 6 2" sizen="72 15" style="Bgs1InRace" substyle="BgTitle3_5" halign="center" valign="center2"/>
+			<label posn="0 6 3" style="TextTitle3" textsize="3" textprefix="$fff" translate="1" text="Rules" halign="center" valign="center2"/>
+			
+			<quad posn="0 0 -2" sizen="68 31" style="Bgs1" substyle="BgWindow2" halign="center" valign="top"/>
+			<label posn="-30 -3 -1" sizen="60 5" autonewline="1" style="TextCardSmallScores2" textprefix="$333" translate="1" text="{{{Rules}}}"
+				halign="left" valign="top"/>
+		</frame>""";
+	return Manialink;
+}
+
+// Show the anchor edition manialink
+Void EditAnchorData(Ident _EditedAnchorDataId) {
+	UpdateValidability();
+
+	declare Text AnchorTag for ManialinkPage;
+	declare Integer AnchorOrder for ManialinkPage;
+	declare Integer Finish for ManialinkPage;
+	
+	switch (AnchorData[_EditedAnchorDataId].DefaultTag) {
+		case "Spawn": {
+			ManialinkText = EditSpawnAnchorManialink();
+		}
+		case "Goal": {
+			ManialinkText = EditGoalAnchorManialink();
+		}
+		case "Checkpoint": {
+			ManialinkText = EditGoalAnchorManialink();
+		}
+		default: {
+			return;
+		}
+	}
+	AnchorTag = AnchorData[_EditedAnchorDataId].Tag;
+	AnchorOrder = AnchorData[_EditedAnchorDataId].Order;
+	
+	Finish = 0;
+	while (Finish == 0) {
+		yield;
+	}
+	
+	if (Finish > 0) {
+		AnchorData[_EditedAnchorDataId].Tag = AnchorTag;
+		AnchorData[_EditedAnchorDataId].Order = AnchorOrder;
+	}
+	
+	UpdateValidability();
+}
+
+// Build manialink for modifying map metadata
+Text GetMetadataManialink() {
+	declare metadata Meta_CampZoneRange for Map = C_DefaultCampRange;
+	
+	declare Manialink = """<script><!--
+		#Include "TextLib" as TextLib
+		
+		main() {
+			wait(Page != Null);
+			
+			declare Quad_Switch <=> (Page.GetFirstChild("Quad_Switch") as CMlQuad);
+			declare Frame_Content <=> (Page.GetFirstChild("Frame_Content") as CMlFrame);
+			declare Entry_CampZone <=> (Frame_Content.GetFirstChild("Entry_CampZone") as CMlEntry);
+			
+			declare UpdateCampZoneRange for Page = -1;
+			declare Real CampZoneRange for Page;
+			CampZoneRange = {{{Meta_CampZoneRange}}};
+			
+			declare ShowMetadata for Page = -1;
+			declare LastShowMetadata = ShowMetadata;
+			
+			declare UpdateRange = False;
+			
+			while (True) {
+				yield;
+				
+				foreach (Event in PendingEvents) {
+					switch (Event.Type) {
+						case CMlEvent::Type::MouseClick: {
+							switch (Event.ControlId) {
+								case "Quad_Switch": {
+									Frame_Content.Visible = !Frame_Content.Visible;
+									if (!Frame_Content.Visible) {
+										UpdateRange = True;
+									}
+								}
+								case "Label_Okay": {
+									Frame_Content.Visible = False;
+									UpdateRange = True;
+								}
+							}
+						}
+						case CMlEvent::Type::EntrySubmit: {
+							UpdateRange = True;
+						}
+					}
+				}
+				
+				if (UpdateRange) {
+					UpdateRange = False;
+					
+					declare Value = TextLib::ToReal(Entry_CampZone.Value);
+					if (Value > 0.) {
+						CampZoneRange = Value;
+						UpdateCampZoneRange = Now;
+					} else {
+						Entry_CampZone.Value = TextLib::ToText(CampZoneRange);
+					}
+				}
+				
+				if (LastShowMetadata == ShowMetadata) continue;
+				LastShowMetadata = ShowMetadata;
+				
+				Frame_Content.Visible = True;
+			}
+		}
+		--></script>
+		<quad id="Quad_Switch" posn="-104 79" sizen="9 9" style="UIConstruction_Buttons" substyle="ScriptEditor" scriptevents="1"
+			halign="center" valign="center2"/>
+		<frame id="Frame_Content" hidden="1">
+			<quad posn="0 8" sizen="120 55" style="Bgs1" substyle="BgWindow3" halign="center" valign="center"/>
+			<label posn="0 27" style="TextTitle1" textsize="6" textprefix="$44c$o" translate="1" text="Map Settings" halign="center" valign="center2"/>
+			
+			<label posn="-50 10" translate="1" text="Camp Zone Range:" halign="left" valign="center2"/>
+			<entry id="Entry_CampZone" posn="40 9.8" sizen="30 5" default="{{{Meta_CampZoneRange}}}" scriptevents="1" halign="right" valign="center2"/>
+			<label posn="42 10" text="m" halign="left" valign="center2"/>
+			
+			<label id="Label_Okay" posn="0 -10" style="CardButtonMediumXL" translate="1" text="Okay" scriptevents="1" halign="center" valign="center2"/>
+		</frame>""";
+	return Manialink;
+}
+
+// Update map metadata
+Void UpdateMetadataLayer(CUILayer _MetadataLayer) {
+	if (_MetadataLayer == Null || _MetadataLayer.LocalPage == Null) return;
+	
+	declare UpdateCampZoneRange for _MetadataLayer.LocalPage = -1;
+	declare Last_UpdateCampZoneRange for _MetadataLayer.LocalPage = -1;
+	if (UpdateCampZoneRange > 0 && UpdateCampZoneRange > Last_UpdateCampZoneRange) {
+		Last_UpdateCampZoneRange = UpdateCampZoneRange;
+		declare metadata Meta_CampZoneRange for Map = C_DefaultCampRange;
+		declare CampZoneRange for _MetadataLayer.LocalPage = Meta_CampZoneRange;
+		Meta_CampZoneRange = CampZoneRange;
+	}
+}
+
+// Sets default values for newly placed blocks
+Void OnMapModified() {
+	declare NewAnchors = CAnchorData[];
+	declare ClanSpawns = [1 => False, 2 => False];
+	declare ClanPoles = [1 => False, 2 => False];
+	
+	// Check for existence of spawns and goals
+	foreach (AnchorId => Anchor in AnchorData) {
+		if (Anchor.Order == 1 || Anchor.Order == 2) {
+			switch (Anchor.DefaultTag) {
+				case "Spawn": {
+					ClanSpawns[Anchor.Order] = True;
+				}
+				case "Goal": {
+					ClanPoles[Anchor.Order] = True;
+				}
+			}
+		} else {
+			NewAnchors.add(Anchor);
+		}
+	}
+	
+	// Set default values for new anchors
+	foreach (Anchor in NewAnchors) {
+		for (Clan, 1, 2) {
+			switch (Anchor.DefaultTag) {
+				case "Spawn": {
+					if (!ClanSpawns[Clan]) {
+						Anchor.Order = Clan;
+						ClanSpawns[Clan] = True;
+						break;
+					}
+				}
+				case "Goal": {
+					if (!ClanPoles[3-Clan]) {
+						Anchor.Order = 3-Clan;
+						ClanPoles[3-Clan] = True;
+						break;
+					}
+				}
+			}
+		}
+	}
+}
+
+/********************************************
+	MAIN
+********************************************/
+
+main() {
+	CustomEditAnchorData = True;
+	declare metadata Text ScriptVersion for Map;
+	ScriptVersion = Version;
+	
+	declare MetadataLayer <=> UILayerCreate();
+	MetadataLayer.ManialinkPage = GetMetadataManialink();
+	
+	UpdateValidability();
+	
+	while (True) {
+		yield;
+		
+		ManialinkText = "";
+		
+		foreach (Event in PendingEvents) {
+			switch (Event.Type) {
+				case CPluginEvent::Type::MapModified: {
+					OnMapModified();
+					UpdateValidability();
+				}
+				case CPluginEvent::Type::EditAnchor: {
+					EditAnchorData(Event.EditedAnchorDataId);
+				}
+				case CPluginEvent::Type::EditObjectives: {
+					declare Integer ShowMetadata for MetadataLayer.LocalPage;
+					ShowMetadata = Now;
+				}
+				case CPluginEvent::Type::StartValidation: {
+					StartTestMapWithMode("Tjost.Script.txt");
+				}
+			}
+		}
+		
+		UpdateMetadataLayer(MetadataLayer);
+	}
+	
+	UILayerDestroyAll();
+}

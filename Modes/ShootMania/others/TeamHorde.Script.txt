@@ -1,0 +1,430 @@
+#RequireContext CSmMode
+
+#Const	CompatibleMapTypes	"testArena"
+#Const	Version				"2013-02-13"
+
+#Include "MathLib" as MathLib
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Mode.Script.txt" as Mode
+#Include "Libs/Nadeo/Shootmania/SM.Script.txt" as SM
+#Include "Libs/Nadeo/Message.Script.txt" as Message
+
+// Game over condition : a certain amount of bots reach the pole(s)
+#Const C_LimitNbBotReachedPole	10.
+
+// Pole capture parameters
+#Const C_PoleCaptureRadius		4.
+
+// Bots parameters
+#Const C_BotArmor				200
+#Const C_BotAggroRadius			0.01
+#Const C_BotDisengageDistance	40.
+#Const C_BotShootPeriodMin		1000
+#Const C_BotShootPeriodMax		1000
+#Const C_BotAccuracy			1.
+#Const C_BotReactionTime		100
+#Const C_BotRocketAnticipation	False
+
+// Waves parameters
+#Const C_NbBotsPerWave				4
+#Const C_BotsFirstSpawnDelay		5000
+#Const C_BotsSpawnDeltaTime			500
+#Const C_BotsWavesSpawnDeltaTime	15000 // Useless when C_SpawnWaitWaveCleared == True
+#Const C_NbWavesBeforeInsaneMode	1
+
+// Reload when hit
+#Const C_AmmoGainOnHit				0.6
+
+// Growing difficulty
+#Const C_MaxDifficulty  			9
+#Const C_Levels_SpeedPower[0.2, 0.4, 0.6, 0.6, 0.8, 0.8, 1., 1., 1., 1.]
+
+// Maximum number of bots at the same time
+#Const MaximumBotsNb				100
+
+// Refers to the custom model for our minions
+declare Ident ModelId;
+declare Ident[Integer] G_SpawnIds;
+declare Ident[Integer] G_GoalIds;
+declare Ident[Integer] G_PathIds;
+
+Text TimeMsToString(Integer _Time)
+{
+	declare Millis = _Time%1000;
+	declare Secs = (_Time/1000)%60;
+	declare Mins = _Time/60000;
+	
+	return Mins^" m "^Secs^" s "^Millis^" ms";
+}
+
+Void SpawnBotPlayer(Integer _Clan, Integer _Armor, CSmLandmark _BotSpawn, Integer _Time, Integer _Difficulty, Boolean _Friend)
+{
+	declare BotPlayer = CreateBotPlayer(ModelId, _Clan, _Armor, _BotSpawn, _Time);
+	assert (BotPlayer != Null && BotPlayer.Driver != Null);
+	BotPlayer.Driver.Behaviour			= CSmPlayerDriver::ESmDriverBehaviour::Patrol;
+	BotPlayer.Driver.ShootPeriodMin 	= C_BotShootPeriodMin;
+	BotPlayer.Driver.ShootPeriodMax 	= C_BotShootPeriodMax;
+	BotPlayer.Driver.Accuracy 			= C_BotAccuracy;
+	BotPlayer.Driver.ReactionTime		= C_BotReactionTime;
+	BotPlayer.Driver.RocketAnticipation	= C_BotRocketAnticipation;
+	BotPlayer.Driver.DisengageDistance 	= C_BotDisengageDistance;
+	BotPlayer.Driver.AggroRadius 		= C_BotAggroRadius;					
+	BotPlayer.EnergyLevel				= 0.;
+	BotPlayer.SpeedPower				= C_Levels_SpeedPower[_Difficulty];
+	if (_Friend) {
+		BotPlayer.Driver.Behaviour		= CSmPlayerDriver::ESmDriverBehaviour::Turret;
+		BotPlayer.Driver.AttackFilter	= CSmPlayerDriver::ESmAttackFilter::AllOpposite;
+		BotPlayer.Driver.AggroRadius 	= 25.0;	
+		BotPlayer.Driver.Saunter_Radius	= 10.0;
+		BotPlayer.Driver.DisengageDistance 	= 20.0;
+		BotPlayer.Driver.ReactionTime = 0;
+		BotPlayer.AmmoGain = 10.0;
+		declare Weapon = MathLib::Rand(1, 4);
+		switch (Weapon) {
+			case 1: {
+				SetPlayerWeapon(BotPlayer, CSmMode::EWeapon::Rocket, True);
+			}
+			case 2: {
+				SetPlayerWeapon(BotPlayer, CSmMode::EWeapon::Nucleus, True);
+			}
+			case 3: {
+				SetPlayerWeapon(BotPlayer, CSmMode::EWeapon::Laser, True);
+			}
+			case 4: {
+				SetPlayerWeapon(BotPlayer, CSmMode::EWeapon::Arrow, True);
+			}
+		}
+	}
+}
+
+Void UnspawnEveryone()
+{	
+	DestroyAllBotPlayers();
+	
+	foreach(Player in Players) {
+		UnspawnPlayer(Player);
+	}
+}
+
+Void ResetUI()
+{
+	UIManager.UIAll.BigMessage = "";
+	UIManager.UIAll.StatusMessage = "";
+	
+	foreach(Player in Players)
+	{
+		declare CUIConfig UI;
+		UI <=> UIManager.GetUI(Player);
+		
+		UI.BigMessage = "";
+		UI.StatusMessage = "";
+		UI.ManialinkPage = """""";
+	}
+}
+
+Ident GetCloseBlock(CSmPlayer _Player) {
+	declare CloseId = NullId;
+	declare Distance = 15.0;
+	foreach (Block in Blocks) {
+		declare Dist = MathLib::Distance(Block.Position, _Player.Position);
+		if (Dist < Distance) {
+			Distance = Dist;
+			CloseId = Block.Id;
+		}
+	}
+	return CloseId;
+}
+
+Void UpdateTDLayer() {
+	declare SpawnReqs = Ident[Integer];
+	foreach (Player in AllPlayers) {
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI != Null) {
+			declare LastPlaceBot for UI = 0;
+			declare netread Net_LastPlaceBot for UI = 0;
+			if (Net_LastPlaceBot > 0 && Net_LastPlaceBot > LastPlaceBot) {
+				LastPlaceBot = Net_LastPlaceBot;
+				if (!Spectators.existskey(Player.Id)) {
+					declare CloseId = GetCloseBlock(Player);
+					if (Blocks.existskey(CloseId)) {
+						SpawnReqs[Player.CurrentClan] = CloseId;
+					}
+				}
+			}
+		}
+	}
+	foreach (Clan => Req in SpawnReqs) {
+		SpawnBotPlayer(Clan, 2, Blocks[Req], Now, 1, True);
+	}
+}
+
+Integer DoTry() {
+	StartTime = Now + 2000;
+
+	declare NextBotSpawnTime = Now + C_BotsFirstSpawnDelay;
+	declare LatestBotSpawnTime = 0;
+	declare NbBotsReachedPole = [1 => 0, 2 => 0];
+		
+	// Growing difficulty
+	declare Difficulty = 0;
+	declare LastDifficultyLevelUp = 0;
+	declare BotsArmorBonus = 0;	
+		
+	// Insane mode
+	declare NbWavesSpawned = 0;
+	
+	// Game ends when a certain amount of bots reach the pole(s)
+	while (!ServerShutdownRequested && !MatchEndRequested &&
+			NbBotsReachedPole[1] < C_LimitNbBotReachedPole && NbBotsReachedPole[2] < C_LimitNbBotReachedPole) {
+		yield;
+		
+		UpdateTDLayer();
+		
+		ResetUI();
+		
+		// Events management
+		foreach(Event in PendingEvents) {
+			if(Event.Type == CSmModeEvent::EType::OnPlayerRequestRespawn) 
+			{
+				PassOn(Event);
+			}
+			if(Event.Type == CSmModeEvent::EType::OnArmorEmpty) 
+			{
+				PassOn(Event);
+			}
+			else if(Event.Type == CSmModeEvent::EType::OnHit)
+			{
+				if (Event.Shooter != Null && Event.Victim != Null) 
+				{
+					if(Event.Victim == Event.Shooter || Event.Victim.CurrentClan == Event.Shooter.CurrentClan)
+					{
+						Discard(Event);
+						continue;
+					}
+					
+					// Reloads laser
+					if(Event.WeaponNum == 1)
+					{
+						AddPlayerAmmo(Event.Shooter,CSmMode::EWeapon::Rocket, C_AmmoGainOnHit);
+						declare CurrentHitStreak for Event.Shooter = 0;
+						CurrentHitStreak += 1;
+					}
+				}
+				
+				PassOn(Event);
+			}
+			else if(Event.Type == CSmModeEvent::EType::OnShoot)
+			{
+				if(Event.Shooter != Null && !Event.Shooter.IsBot && Event.WeaponNum == 1)
+				{
+					declare CurrentShotNb for Event.Shooter = 0;
+					CurrentShotNb += 1;
+				}
+			}
+		}
+		
+		foreach(Player in Players)
+		{
+			if(Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned)
+			{
+				Player.ForceModelId = ModelId;
+				SetPlayerWeapon(Player, CSmMode::EWeapon::Rocket, False);
+				SpawnPlayer(Player, Player.RequestedClan, Player.ArmorMax, BlockSpawns[0], Now);			
+			}
+		}
+		
+		foreach(Bot in BotPlayers) 
+		{
+			// Destroys unspawned bots
+			if(Bot.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned)
+			{
+				DestroyBotPlayer(Bot);
+			}
+			else if(Bot.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned)
+			{
+				// Check if the bot is close to a pole
+				if (Bot.BlockPole != Null && Bot.BlockPole.Tag == "Goal" && Bot.BlockPole.Order == Bot.CurrentClan) {
+					if (NbBotsReachedPole.existskey(3-Bot.CurrentClan)) {
+						NbBotsReachedPole[3-Bot.CurrentClan] += 1;
+					}
+					UnspawnPlayer(Bot);
+				}
+			}
+		}
+		
+		foreach (Player in Players) {
+			declare CUIConfig UI;
+			UI <=> UIManager.GetUI(Player);
+			
+			// Informations o the bottom right of the screen
+			UI.ManialinkPage = """
+			<frame posn="157 -80 0">
+				<label posn="0 0 1" halign="right" style="TextButtonNav" text="{{{_("Current Difficulty")}}}: {{{ Difficulty }}}" />
+			</frame>
+			<frame posn="157 -85 0">
+				<label posn="0 0 1" halign="right" style="TextButtonNav" text="{{{_("Bots Reached Pole")}}}: {{{ NbBotsReachedPole }}}" />
+			</frame>
+			""";
+		}	
+		
+		// Spawn a wave of bot on the beginning of each path
+		if(BotPlayers.count < MaximumBotsNb && Now > NextBotSpawnTime)
+		{
+			foreach(Spawn in BotPaths)
+			{				
+				for(I, 1, C_NbBotsPerWave) {
+					// We want a constant distance between the bots of a wave
+					declare TimeDelta = MathLib::FloorInteger(C_BotsSpawnDeltaTime/C_Levels_SpeedPower[Difficulty]);
+					SpawnBotPlayer(Spawn.Clan, C_BotArmor + BotsArmorBonus, Spawn, Now + (I-1)*TimeDelta, Difficulty, False);
+				}
+			}
+			
+			if(Difficulty < C_MaxDifficulty)
+			{
+				Difficulty += 1;
+			}
+			else
+			{
+				BotsArmorBonus += 100;
+			}
+			
+			// Insane mode = on spawn en continu
+			if(NbWavesSpawned >= C_NbWavesBeforeInsaneMode)
+			{
+				NextBotSpawnTime = Now + C_NbBotsPerWave*C_BotsSpawnDeltaTime;
+			}
+			else
+			{
+				NextBotSpawnTime = Now + C_BotsWavesSpawnDeltaTime;
+			}
+			
+			if(NbWavesSpawned != 0 && Difficulty < C_MaxDifficulty)
+			{
+				Difficulty += 1;
+				LastDifficultyLevelUp = Now;
+			}
+			
+			LatestBotSpawnTime = Now;
+			NbWavesSpawned += 1;
+		}
+		
+		if(NbWavesSpawned > C_NbWavesBeforeInsaneMode)
+		{
+			UIManager.UIAll.BigMessage = "INSANE MODE";
+		}
+		else if(Now >= LatestBotSpawnTime && Now <= LatestBotSpawnTime + 3000)
+		{
+			UIManager.UIAll.BigMessage = "New wave incoming !";
+		}
+	}	
+	
+	foreach(Player in Players) {
+		declare CUIConfig UI;
+		UI <=> UIManager.GetUI(Player);
+		
+		UI.StatusMessage = "";
+		UI.BigMessage = "";
+	}
+	
+	for (Clan, 1, 2) {
+		if (NbBotsReachedPole[Clan] >= C_LimitNbBotReachedPole) {
+			return Clan;
+		}
+	}
+	return 0;
+}
+
+Text GetTDLayer() {
+	declare Manialink = """
+		<script><!--
+			main() {
+				declare netwrite Integer Net_LastPlaceBot for UI;
+				Net_LastPlaceBot = 0;
+				
+				while (True) {
+					yield;
+					
+					foreach (Event in PendingEvents) {
+						switch (Event.Type) {
+							case CMlEvent::Type::KeyPress: {
+								switch (Event.KeyName) {
+									case "F3": {
+										Net_LastPlaceBot = ArenaNow;
+										break;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		--></script>""";
+	return Manialink;
+}
+
+main()
+{
+	log("start"^Now);
+	
+	UseClans = True;
+	UseAllies = True;
+	DbgEnableNavMesh = True;
+		
+	while (!ServerShutdownRequested)
+	{
+		ModelId = ItemList_Add("Characters/OrganicSmall.Item.gbx");
+//		ModelId = ItemList_Add("ArenaPlayer/Toad.zip");
+	
+		Mode::LoadMap();
+		
+		G_SpawnIds.clear();
+		G_GoalIds.clear();
+		G_PathIds.clear();
+		
+		foreach (Spawn in BlockSpawns) {
+			G_SpawnIds[Spawn.Order] = Spawn.Id;
+		}
+		
+		foreach (Pole in BlockPoles) {
+			G_GoalIds[Pole.Order] = Pole.Id;
+		}
+		
+		foreach (Path in BotPaths) {
+			G_PathIds[Path.Clan] = Path.Id;
+		}
+		
+		foreach (UI in UIManager.UI) {
+			declare Integer LastPlaceBot for UI;
+			LastPlaceBot = 0;
+		}
+		
+		SM::SetupDefaultVisibility();
+		declare TDLayer <=> UIManager.UILayerCreate();
+		TDLayer.ManialinkPage = GetTDLayer();
+		UIManager.UIAll.UILayers.add(TDLayer);
+			
+		// Game start
+		sleep(3000);
+		declare Score = 0;
+		MatchEndRequested = False;
+		Score = DoTry();
+		
+		// Game over
+		UnspawnEveryone();
+		
+		// Display score (and "medal")
+		UIManager.UIAll.BigMessage = Teams[2-Score].ColorizedName^" wins the map!";
+		declare EndRoundTime = Now;
+		while (Now - EndRoundTime <= 3000)
+		{
+			yield;
+		}
+		
+		ResetUI();
+		UIManager.UILayerDestroyAll();
+		
+		MatchEndRequested = True;
+		
+		Mode::UnloadMap();
+	}
+}

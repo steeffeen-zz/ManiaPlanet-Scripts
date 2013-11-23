@@ -1,0 +1,378 @@
+/**
+ * Validation for the Obstacle maps
+ * Author: steeffeen
+ * Contact: schteffens@gmail.com
+ */
+
+#RequireContext CSmMapType
+
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Anchor.Script.txt" as Anchor
+
+#Const Version		"2.1 (2013-03-12)"
+
+// Rules texts
+#Const SpawnRules		"""You must place $<$f00exactly one Spawn$> and you can place $<$00fas much CPSpawns as you want$>.
+CPSpawns should be placed close to their checkpoints.
+
+$<$0ddSpecial Spawns:$>
+$<$066CheckpointType1:$> Nucleus
+$<$066CheckpointType2:$> No Ammunition"""
+
+#Const CPRules			"""You have to place $<$f00at least one Goal$> and $<$00fas much Checkpoints as you want$>.
+
+$<$0ddSpecial Checkpoints:$>
+$<$066CheckpointType1:$> No Ammunition
+$<$066CheckpointType2:$> Endless Ammunition
+$<$066CheckpointType3:$> Portal Checkpoint
+(Standard Checkpoints will reset the ammunition to default.)
+
+You are able to assign a checkpoint order forcing the players to reach the CPs in this order."""
+
+/* -------------------------------------- */
+// Constants
+/* -------------------------------------- */
+
+/* -------------------------------------- */
+// Variables
+/* -------------------------------------- */
+declare Ident G_StartSpawnId;
+declare Ident[] G_KnownIds;
+
+/* -------------------------------------- */
+// Functions
+/* -------------------------------------- */
+
+/* -------------------------------------- */
+// Initialize the anchors
+Void InitAnchors() {
+	G_StartSpawnId = NullId;
+	G_KnownIds.clear();
+	foreach (Data in AnchorData) {
+		switch (Data.DefaultTag) {
+			case "Spawn": {
+				if (G_StartSpawnId == NullId && TextLib::SubString(Data.Tag, 0, 5) == "Spawn") {
+					G_StartSpawnId = Data.Id;
+				}
+			}
+		}
+		G_KnownIds.add(Data.Id);
+	}
+}
+
+/* -------------------------------------- */
+// Check if the map is valid
+Void UpdateValidability() {	 
+	Anchor::UpdateAnchorCounts();
+	
+	// Local anchors
+	declare AnchorDataTags = Text[];
+	foreach (Data in AnchorData) {
+		AnchorDataTags.add(Data.Tag);
+	}
+	
+	// Exactly one spawn
+	//if (!Anchor::HasExactlyOneAnchor("Spawn", 0, _("You must place exactly one start spawn."))) return;
+	declare SpawnTags = ["Spawn","SpawnType1","SpawnType2"];
+	declare SpawnExists = 0;
+	foreach (Tag in SpawnTags) {
+		if (AnchorDataTags.exists(Tag)) {
+			SpawnExists += 1;
+		}
+	}
+	if (SpawnExists != 1) {
+		ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+		ValidabilityRequirementsMessage = "You must place exactly one start spawn.";
+		return;
+	}
+	
+	// At least one goal
+	if (!Anchor::HasAtLeastOneAnchor("Goal", 0, _("You must place at least one goal. (Order == 0)"))) {
+		return;
+	}
+	
+	// Update validation status
+	ValidationStatus = CSmMapType::ValidationStatus::Validated;
+}
+
+/* -------------------------------------- */
+// Checks for new anchors and sets initial tags
+Void UpdateAnchors() {
+	// Check if known anchors has been deleted
+	declare Ident[] DeletedIds;
+	foreach (Id in G_KnownIds) {
+		if (!AnchorData.existskey(Id)) {
+			DeletedIds.add(Id);
+		}
+	}
+	declare Boolean Removed;
+	foreach (Id in DeletedIds) {
+		Removed = G_KnownIds.remove(Id);
+	}
+	
+	// Check if former start spawn has been deleted or modified
+	if (G_StartSpawnId != NullId) {
+		declare StartSpawnSet = False;
+		foreach (Data in AnchorData) {
+			if (Data.Id == G_StartSpawnId) {
+				if (Data.Tag == "Spawn") {
+					StartSpawnSet = True;
+				}
+				break;
+			}
+		}
+		if (!StartSpawnSet) {
+			G_StartSpawnId = NullId;
+		}
+	}
+	
+	// Assign new initial tag if necessary
+	foreach (Data in AnchorData) {
+		// Only touch new anchors
+		if (!G_KnownIds.exists(Data.Id)) {
+			switch (Data.DefaultTag) {
+				case "Spawn": {
+					if (G_StartSpawnId == NullId) {
+						G_StartSpawnId = Data.Id;
+					} else {
+						Data.Tag = "CPSpawn";
+					}
+				}
+				case "Goal": {
+					Data.Tag = "Checkpoint";
+				}
+			}
+			G_KnownIds.add(Data.Id);
+		}
+	}
+}
+
+/* -------------------------------------- */
+// Manialink for goals
+Text EditGoalsManialink() {
+	return """<script><!--
+		main() {
+			declare Buttons = [
+			(Page.GetFirstChild("No-Function") as CMlLabel),
+			(Page.GetFirstChild("Goal") as CMlLabel),
+			(Page.GetFirstChild("Checkpoint") as CMlLabel),
+			(Page.GetFirstChild("CheckpointType1") as CMlLabel),
+			(Page.GetFirstChild("CheckpointType2") as CMlLabel),
+			(Page.GetFirstChild("CheckpointType3") as CMlLabel)];
+			
+			declare OrderEntry <=> (Page.GetFirstChild("OrderEntry") as CMlEntry);
+			
+			declare Boolean Finish for Page;
+			declare Text AnchorTag for Page;
+			declare Text AnchorOrder for Page;
+			
+			OrderEntry.Value = AnchorOrder;
+			
+			Finish = False;	
+			while (!Finish) {
+				yield;
+				foreach(Button in Buttons) {
+					if (AnchorTag == Button.ControlId) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				foreach (Event in PendingEvents) {
+					switch(Event.Type){
+						case CMlEvent::Type::MouseClick: {
+							if (Event.ControlId != "Cancel") {
+								AnchorTag = Event.ControlId;
+								AnchorOrder = OrderEntry.Value;
+							}
+							Finish = True;
+						}	
+					}
+				}
+			}
+		}			
+	--></script>
+	<frame posn="120 45">
+		<quad posn="0 8 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 13 3" sizen="70 15" halign="center" valign="bottom" style="TextTitle3" text="$fffEdit Goals and Checkpoints" />
+		<quad posn="0 8 -1" sizen="70 54" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<frame posn="0 -4">
+			<label id="No-Function" posn="0 8" scale="1.4" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="Goal" posn="0 1" scale="1.4" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="Checkpoint" posn="0 -6" scale="1.4" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="CheckpointType1" posn="-31 -14" scale="0.8" halign="left" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="CheckpointType2" posn="33 -14" scale="0.8" halign="right" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="CheckpointType3" posn="0 -18" scale="0.8" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<format textcolor="00fc"/>
+			<label posn="-11 -27" text="Order:" valign="center" />
+			<entry id="OrderEntry" posn="15 -27.5" sizen="10 4.7" halign="right" valign="center" default="0" ScriptEvents="true"/>
+		</frame>
+		<label id="Cancel" text="Cancel" posn="0 -37" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+    </frame>
+	<frame posn="120 -17">
+		<quad posn="0 0 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffRules" />
+		<quad posn="0 0 -1" sizen="70 54" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<frame posn="-32 -3">
+			<label posn="0 0" sizen="64 7" autonewline="1" style="TextCardSmallScores2" text="$111{{{CPRules}}}" />
+		</frame>
+	</frame>
+	""";
+}
+
+/* -------------------------------------- */
+// Manialink for spawns
+Text EditSpawnsManialink() {
+	return """<script><!--
+		main() {
+			declare Buttons = [
+			(Page.GetFirstChild("No-Function") as CMlLabel),
+			(Page.GetFirstChild("CPSpawn") as CMlLabel),
+			(Page.GetFirstChild("Spawn") as CMlLabel),
+			(Page.GetFirstChild("SpawnType1") as CMlLabel),
+			(Page.GetFirstChild("SpawnType2") as CMlLabel)];
+			
+			declare Text AnchorTag for Page;
+			declare Boolean Finish for Page;
+			Finish = False;	
+			while (!Finish) {
+				yield;
+				foreach (Button in Buttons) {
+					if (AnchorTag == Button.ControlId) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				foreach (Event in PendingEvents) {
+					switch (Event.Type){
+						case CMlEvent::Type::MouseClick: {
+							if (Event.ControlId != "Cancel") {
+								AnchorTag = Event.ControlId;
+							}
+							Finish = True;
+						}	
+					}
+				}
+			}
+		}			
+	--></script>
+	<frame posn="120 35">
+		<quad posn="0 8 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 13 3" sizen="70 15" halign="center" valign="bottom" style="TextTitle3" text="$fffEdit Spawns" />
+		<quad posn="0 8 -1" sizen="70 41" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<frame posn="0 -4">
+			<label id="No-Function" posn="0 8" scale="1.4" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="CPSpawn" posn="0 1" scale="1.4" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="Spawn" posn="0 -6" scale="1.4" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="SpawnType1" posn="-31 -14" scale="0.8" halign="left" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="SpawnType2" posn="33 -14" scale="0.8" halign="right" style="TextButtonMedium" ScriptEvents="true"/>
+		</frame>
+		<label id="Cancel" text="Cancel" posn="0 -24" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+    </frame>
+	<frame posn="120 -14">
+		<quad posn="0 0 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffRules" />
+		<quad posn="0 0 -1" sizen="70 39" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<frame posn="-32 -3">
+			<label posn="0 0" sizen="64 7" autonewline="1" style="TextCardSmallScores2" text="$111{{{SpawnRules}}}" />
+		</frame>
+	</frame>
+	""";
+}
+
+/* -------------------------------------- */
+// Manialink for non editable anchor
+Text NoEditManialink() {
+	return """<script><!--			
+			main() {
+				declare Boolean Finish for Page;
+				Finish = False;	
+				while (!Finish) {
+					yield;
+					
+					foreach (Event in PendingEvents) {
+						switch (Event.Type){
+							case CMlEvent::Type::MouseClick: {
+								Finish = True;
+							}	
+						}
+					}
+				}
+			}			
+		--></script>
+		<frame posn="120 35">
+			<quad posn="0 0 -1" sizen="70 15" halign="center" style="Bgs1" substyle="BgWindow2"/>
+			<quad posn="0 0 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+			<label posn="0 5.5 3" scale="0.9" halign="center" valign="bottom" style="TextTitle3" text="$fffThis anchor is not editable" />
+			<label text="OK" posn="0 -3.5 3" halign="center" style="CardButtonMedium" ScriptEvents="true"/>
+	    </frame>
+	""";
+}
+
+/* -------------------------------------- */
+// Show the anchor editing manialink
+Void EditAnchorData(Ident _EditedAnchorDataId) {
+	declare Boolean Finish for ManialinkPage;
+	declare Text AnchorTag for ManialinkPage;
+	declare Text AnchorOrder for ManialinkPage;
+	
+	switch (AnchorData[_EditedAnchorDataId].DefaultTag) {
+		case "Goal": {
+			ManialinkText = EditGoalsManialink();
+		}
+		case "Spawn": {
+			ManialinkText = EditSpawnsManialink();
+		}
+		default: {
+			ManialinkText = NoEditManialink();
+		}
+	}
+	
+	AnchorTag = AnchorData[_EditedAnchorDataId].Tag;
+	AnchorOrder = TextLib::ToText(AnchorData[_EditedAnchorDataId].Order);
+	
+	Finish = False;
+	while (!Finish) {
+		yield;
+	}
+	AnchorData[_EditedAnchorDataId].Tag = AnchorTag;
+	AnchorData[_EditedAnchorDataId].Order = TextLib::ToInteger(AnchorOrder);
+	
+	UpdateValidability();
+}
+
+/* -------------------------------------- */
+// Main
+/* -------------------------------------- */
+
+main() {
+	log("ObstacleArena.Script.txt loaded!");
+	log("Version: "^Version);
+	log("Written by: steeffeen");
+
+	CustomEditAnchorData = True;
+
+	InitAnchors();	
+	UpdateValidability();
+	
+	while (True) {	
+		yield;
+		
+		ManialinkText = "";		
+			
+		foreach (Event in PendingEvents) {
+			switch (Event.Type) {
+				case CPluginEvent::Type::MapModified: {
+					UpdateAnchors();
+					UpdateValidability();
+				}
+				case CPluginEvent::Type::EditAnchor: {
+					EditAnchorData(Event.EditedAnchorDataId);
+				}
+			}
+		}		
+	}	
+}

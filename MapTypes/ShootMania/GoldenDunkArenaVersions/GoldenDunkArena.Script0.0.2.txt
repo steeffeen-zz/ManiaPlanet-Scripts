@@ -1,0 +1,273 @@
+/* ------------------------ */
+//	GoldenDunk MapType		//
+//	Created by steeffeen	//
+/* ------------------------ */
+
+#RequireContext CSmMapType
+
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Anchor.Script.txt" as Anchor
+
+#Const Version	"0.0.2 (2013-01-31)"
+
+declare Text[Integer] G_HoopCenterPositions;
+declare Text[Ident] G_HoopCenterXPositions;
+declare Text[Ident] G_HoopCenterZPositions;
+
+// Parse positions string to array
+Void ParsePositionsString() {
+	declare String = Map.ObjectiveTextAuthor;
+	declare Begin = 0;
+	declare Order = -1;
+	declare XPosi = "-0.0";
+	declare ZPosi = "-0.0";
+	
+	for (Index, 0, TextLib::Length(String)) {
+		declare Char = TextLib::SubString(String, Index, 1);
+		switch (Char) {
+			case ":": {
+				Order = TextLib::ToInteger(TextLib::SubString(String, Begin, Index-Begin));
+				Begin = Index+1;
+			}
+			case ",": {
+				XPosi = TextLib::SubString(String, Begin, Index-Begin);
+				Begin = Index+1;
+			}
+			case ";": {
+				ZPosi = TextLib::SubString(String, Begin, Index-Begin);
+				Begin = Index+1;
+				
+				G_HoopCenterPositions[Order] = XPosi^","^ZPosi;
+				foreach (Anchor in AnchorData) {
+					switch (Anchor.Tag) {
+						case "Spawn": {
+							if (Anchor.Order == Order) {
+								G_HoopCenterXPositions[Anchor.Id] = XPosi;
+								G_HoopCenterZPositions[Anchor.Id] = ZPosi;
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// Builds positions string out of center positions and saves it
+Void SavePositionsString() {
+	declare String = "";
+	foreach (Order => Posi in G_HoopCenterPositions) {
+		String ^= Order^":"^Posi^";";
+	}
+	Map.ObjectiveTextAuthor = String;
+}
+
+// Initializes/Updates values of anchordata
+Void UpdateValues() {
+	foreach (Anchor in AnchorData) {
+		switch (Anchor.DefaultTag) {
+			case "Goal": {
+				Anchor.Tag = "Balls";
+				Anchor.Order = Anchor.DefaultOrder;
+			}
+			case "Spawn": {
+				Anchor.Tag = "Spawn";
+				if (Anchor.Order != 1 && Anchor.Order != 2) {
+					Anchor.Order = 1;
+				}
+			}
+		}
+	}
+}
+
+// Check if the map is valid
+Void UpdateValidability() {
+	ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+	UpdateValues();
+	Anchor::UpdateAnchorCounts();
+	
+	for (I, 1, 2) {
+		if (!Anchor::HasExactlyOneAnchor("Spawn", I, TextLib::Compose(_("You must place exactly one Spawn #%1"), TextLib::ToText(I)))) {
+			return;
+		}
+		if (!G_HoopCenterPositions.existskey(I)) {
+			ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+			ValidabilityRequirementsMessage = _("You must set the Hoop Center Position of each spawn.");
+			return;
+		}
+	}
+	if (!Anchor::HasAtLeastOneAnchor("Balls", 0, _("You must place at least on Goal for Balls."))) {
+		return;
+	}
+	
+	ValidationStatus = CSmMapType::ValidationStatus::Validated;
+	SavePositionsString();
+}
+
+// Edit spawn blocks
+Void EditSpawnAnchor(Ident _AnchorId) {
+log(_AnchorId);
+	declare AnchorOrder for ManialinkPage = 1;
+	declare HoopCenterXPosition for ManialinkPage = "0.0";
+	HoopCenterXPosition = "0.0";
+	declare HoopCenterZPosition for ManialinkPage = "0.0";
+	HoopCenterZPosition = "0.0";
+	declare Finish for ManialinkPage = False;
+	declare Save for ManialinkPage = False;
+	
+	AnchorOrder = AnchorData[_AnchorId].Order;
+	if (G_HoopCenterXPositions.existskey(_AnchorId)) {
+		HoopCenterXPosition = G_HoopCenterXPositions[_AnchorId];
+	}
+	if (G_HoopCenterZPositions.existskey(_AnchorId)) {
+		HoopCenterZPosition = G_HoopCenterZPositions[_AnchorId];
+	}
+	Finish = False;
+	
+	ManialinkText =
+	"""<script><!--
+		#Include "TextLib" as TextLib
+		
+		main() {
+			declare Buttons = [
+				(Page.GetFirstChild("1") as CMlLabel),
+				(Page.GetFirstChild("2") as CMlLabel)];
+			declare XEntry = (Page.GetFirstChild("X") as CMlEntry);
+			declare ZEntry = (Page.GetFirstChild("Z") as CMlEntry);
+			
+			declare AnchorOrder for Page = 1;
+			declare HoopCenterXPosition for Page = "";
+			declare HoopCenterZPosition for Page = "";
+			declare Finish for Page = False;
+			declare Save for Page = False;
+			
+			XEntry.Value = HoopCenterXPosition;
+			ZEntry.Value = HoopCenterZPosition;
+			
+			while (!Finish) {
+				yield;
+				
+				foreach (Button in Buttons) {
+					if (AnchorOrder == TextLib::ToInteger(Button.ControlId)) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				foreach (Event in PendingEvents) {
+					switch(Event.Type) {
+						case CMlEvent::Type::MouseClick : {
+							switch (Event.ControlId) {
+								case "Cancel": {
+									Finish = True;
+								}
+								default: {
+									AnchorOrder = TextLib::ToInteger(Event.ControlId);
+									HoopCenterXPosition = XEntry.Value;
+									HoopCenterZPosition = ZEntry.Value;
+									Finish = True;
+									Save = True;
+								}
+							}
+						}	
+					}
+				}
+			}
+		}			
+	--></script>
+	<frame posn="118 42 99">
+		<quad posn="0 0 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<quad posn="0 0 -1" sizen="70 42" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="Edit Spawn"/>
+		<frame posn="0 -4">
+			<label id="1" posn="-6 0" scale="2.5" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="2" posn="6 0" scale="2.5" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+		</frame>
+		<label posn="0 -18" halign="center" valign="center" text="$000Hoop Center Position"/>
+		<label posn="-25 -24.5" halign="center" valign="center" text="$000X"/>
+		<entry id="X" posn="-14 -25" sizen="16 5" halign="center" valign="center" default="0.0"/>
+		<label posn="3 -24.5" halign="center" valign="center" text="$000Z"/>
+		<entry id="Z" posn="14 -25" sizen="16 5" halign="center" valign="center" default="0.0"/>
+		<label id="Cancel" text="Cancel" posn="0 -32" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+    </frame>
+	""";
+	
+	while (!Finish) {
+		yield;
+	}
+	
+	ManialinkText = "";
+	AnchorData[_AnchorId].Order = AnchorOrder;
+	if (Save) {
+		G_HoopCenterXPositions[_AnchorId] = HoopCenterXPosition;
+		G_HoopCenterZPositions[_AnchorId] = HoopCenterZPosition;
+		G_HoopCenterPositions[AnchorOrder] = HoopCenterXPosition^","^HoopCenterZPosition;
+	}
+}
+
+// Edit goal blocks
+Void EditGoalAnchor(Ident _AnchorId) {
+	declare Finish for ManialinkPage = False;
+	Finish = False;
+	
+	ManialinkText = """
+	<script><!--
+		main() {
+			declare Finish for Page = False;
+	
+			while (!Finish) {
+				yield;
+				
+				foreach (Event in PendingEvents) {
+					switch (Event.Type) {
+						case CMlEvent::Type::MouseClick : {
+							Finish = True;
+						}
+					}
+				}
+			}
+		}
+	--></script>
+	<frame posn="0 30 99">
+		<label text="This block can't be edited." halign="center" valign="center" style="CardButtonMedium" textsize="8" ScriptEvents="1"/>
+	</frame>""";
+	
+	while (!Finish) {
+		yield;
+	}
+	
+	ManialinkText = "";
+}
+
+// Main
+main() {
+	CustomEditAnchorData = True;
+	ParsePositionsString();
+	UpdateValidability();
+	
+	while (True) {
+		yield;
+		
+		ManialinkText = "";
+		foreach (Event in PendingEvents) {
+			switch (Event.Type) {
+				case CPluginEvent::Type::MapModified: {
+					UpdateValidability();
+				}
+				case CPluginEvent::Type::EditAnchor: {
+					switch (AnchorData[Event.EditedAnchorDataId].DefaultTag) {
+						case "Spawn": {
+							EditSpawnAnchor(Event.EditedAnchorDataId);
+						}
+						case "Goal": {
+							EditGoalAnchor(Event.EditedAnchorDataId);
+						}
+					}
+					UpdateValidability();
+				}
+			}
+		}		
+	}	
+}

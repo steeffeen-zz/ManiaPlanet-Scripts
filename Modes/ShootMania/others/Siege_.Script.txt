@@ -1,0 +1,303 @@
+
+#Extends "Modes/ShootMania/OSiege.Script.txt"
+
+#Include "Libs/Nadeo/Interface_.Script.txt" as Steff_Interface
+#Include "Libs/Nadeo/TabsServer.Script.txt" as Steff_Tabs
+#Include "Libs/Nadeo/Top2.Script.txt" as Steff_Top
+#Include "Libs/Nadeo/ShootMania/AFK.Script.txt" as Steff_AFK
+
+#Const Steff_Version			"X.2013-06-26"
+#Const Steff_ScriptName			"X.Siege.Script.txt"
+
+// Top names
+#Const	T_Steff_Damage	"Damage"
+#Const	T_Steff_Capture	"Capture"
+#Const	T_Steff_Attack	"Attack"
+
+declare Integer	G_Steff_LastAfkCheck;
+
+***LogVersion***
+***
+MB_LogVersion(Steff_ScriptName, Steff_Version);
+MB_LogVersion(Steff_AFK::GetScriptName(), Steff_AFK::GetScriptVersion());
+MB_LogVersion(Steff_Interface::GetScriptName(), Steff_Interface::GetScriptVersion());
+MB_LogVersion(Steff_Tabs::GetScriptName(), Steff_Tabs::GetScriptVersion());
+MB_LogVersion(Steff_Top::GetScriptName(), Steff_Top::GetScriptVersion());
+***
+
+***StartServer***
+***
+// Teams layer
+declare Steff_LayerTeams = UIManager.UILayerCreate();
+Steff_Interface::SetLayerTeams(Steff_LayerTeams);
+UIManager.UIAll.UILayers.add(Steff_LayerTeams);
+
+// Rank layer
+Steff_Interface::CreateRank();
+
+// Extra layer
+declare Steff_LayerExtra = UIManager.UILayerCreate();
+Steff_LayerExtra.ManialinkPage = Steff_CreateLayerExtra();
+UIManager.UIAll.UILayers.add(Steff_LayerExtra);
+
+// Tabs
+Steff_Tabs::Load();
+declare Steff_TabsLayer <=> Steff_Tabs::CreateTabPaneLayer(["ScoresTab" => "Rankings", "TopTab" => "Buddies"], 65, 16, True);
+Steff_TabsLayer.Type = CUILayer::EUILayerType::AltMenu;
+UIManager.UIAll.UILayers.add(Steff_TabsLayer);
+
+// Tops
+declare TopWidth = 53.;
+Steff_Top::Load();
+Steff_Top::SetLayerType(CUILayer::EUILayerType::AltMenu);
+Steff_Top::SetTopWidth(TopWidth);
+Steff_Top::SetCommonBackgroundImage("file://Media/Manialinks/Shootmania/Common/topsBg.dds", <0., 95.7>, <180., 175.2>);
+declare Tops = [
+	T_Steff_Damage	=> _("Top Damage"),
+	T_Steff_Capture	=> _("Top Captured"),
+	T_Steff_Attack	=> _("Top Attack Turns")
+];
+declare Count = -1.;
+foreach (Key => Name in Tops) {
+	Steff_Top::Create(Key, Name, 13, <Count * (TopWidth + 1.1), 37.9>);
+	Count += 1.;
+}
+***
+
+***StartMap***
+***
+Steff_UpdateLayerExtra();
+
+// Init tops
+Steff_Top::ResetAll();
+foreach (Player in AllPlayers) {
+	declare Integer Steff_Damage for Player;
+	declare Integer Steff_Capture for Player;
+	declare Integer Steff_AttackTurns for Player;
+	Steff_Damage = 0;
+	Steff_Capture = 0;
+	Steff_AttackTurns = 0;
+}
+***
+
+***StartTurn***
+***
+Steff_UpdateLayerExtra();
+***
+
+***OnNewPlayer***
+***
+declare UI <=> UIManager.GetUI(Player);
+if (UI == Null) continue;
+Steff_Tabs::UseTabs(UI, "ScoresTab");
+***
+
+***OnNewSpectator***
+***
+declare UI <=> UIManager.GetUI(Spectator);
+if (UI == Null) continue;
+Steff_Tabs::UseTabs(UI, "ScoresTab");
+***
+
+***PlayLoop***
+***
+Steff_UpdateLayerExtra();
+Steff_Tabs::XmlRpcLoop();
+Steff_Top::Loop();
+
+// Afk check
+if (G_Steff_LastAfkCheck + 30000 < Now) {
+	G_Steff_LastAfkCheck = Now;
+	Steff_AFK::ManageAFKPlayers();
+}
+
+// Events
+foreach (Event in PendingEvents) {
+	switch (Event.Type) {
+		case CSmModeEvent::EType::OnHit: {
+			if (Event.Shooter == Null || Event.Victim == Null || Event.Shooter.CurrentClan == Event.Victim.CurrentClan) continue;
+			// Damage
+			declare Steff_Damage for Event.Shooter = 0;
+			Steff_Damage += 1;
+			Steff_Top::SetRecord(Event.Shooter, T_Steff_Damage, TextLib::ToText(Steff_Damage), -Steff_Damage);
+		}
+		case CSmModeEvent::EType::OnCapture: {
+			if (Event.BlockPole == Null || Event.BlockPole.Tag != "Goal"^(G_GoalToCaptureIndex-1)) continue;
+			// Attack turns
+			foreach (Player in Players) {
+				if (Player.CurrentClan != G_CapturingClan || Player.Armor <= 0) continue;
+				declare Steff_AttackTurns for Player = 0;
+				Steff_AttackTurns += 1;
+				Steff_Top::SetRecord(Player, T_Steff_Attack, TextLib::ToText(Steff_AttackTurns), -Steff_AttackTurns);
+			}
+		}
+	}
+}
+
+// Players
+foreach (Player in Players) {
+	switch (Player.SpawnStatus) {
+		case CSmPlayer::ESpawnStatus::Spawned: {
+			if (Player.BlockPole == Null || Player.BlockPole.Captured || Player.BlockPole.Gauge.Speed <= 0) continue;
+			// Capture
+			declare Steff_Capture for Player = 0;
+			Steff_Capture += Period;
+			Steff_Top::SetRecord(Player, T_Steff_Capture,
+				TextLib::Compose("%1%2", TextLib::ToText(MathLib::FloorInteger(Steff_Capture / (S_GoalCaptureTime * 10.))), "%"),
+				-Steff_Capture);
+		}
+	}
+}
+***
+
+***EndTurn***
+***
+Steff_UpdateLayerExtra();
+***
+
+***EndMap***
+***
+Steff_UpdateLayerExtra();
+***
+
+***EndServer***
+***
+Steff_Interface::DestroyRank();
+UIManager.UILayerDestroyAll();
+***
+
+// Send message to players with team alarm enabled
+Void Steff_SendTeamChange(Text _Message) {
+	foreach (Player in AllPlayers) {
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI == Null) continue;
+		declare netread Net_Steff_EnableTeamAlarm for UI = False;
+		if (!Net_Steff_EnableTeamAlarm) continue;
+		UI.SendChat(_Message);
+	}
+}
+
+// Create the extra layer manialink
+Text Steff_CreateLayerExtra() {
+	declare Manialink = """<script><!--
+		#Include "MathLib" as MathLib
+		#Include "TextLib" as TextLib
+		
+		main() {
+			declare Frame_Capturing	<=> (Page.GetFirstChild("Frame_Capturing") as CMlFrame);
+			declare Label_Capturing	<=> (Frame_Capturing.GetFirstChild("Label_Capturing") as CMlLabel);
+			declare Gauge_Capturing	<=> (Frame_Capturing.GetFirstChild("Gauge_Capturing") as CMlGauge);
+			
+			declare LastCapturedTime = -9999;
+			
+			declare Ident[] Captured;
+			
+			declare netread Net_Steff_ShowCapture for Teams[0] = True;
+			declare netread Net_Steff_StartTime for Teams[0] = -1;
+			
+			//declare persistent Steff_EnableTeamAlarm for LocalUser = False;
+			declare netwrite Boolean Net_Steff_EnableTeamAlarm for UI;
+			//Net_Steff_EnableTeamAlarm = Steff_EnableTeamAlarm;
+			
+			while (True) {
+				yield;
+				
+				if (InputPlayer == Null) continue;
+				
+				declare ThisPlayer <=> InputPlayer;
+				if (GUIPlayer != Null) ThisPlayer <=> GUIPlayer;
+				
+				// Events
+				foreach (Event in PendingEvents) {
+					switch (Event.Type) {
+						case CMlEvent::Type::KeyPress: {
+							switch (Event.KeyCode) {
+								case 39: {
+									// F3
+									Net_Steff_EnableTeamAlarm = !Net_Steff_EnableTeamAlarm;
+									//Steff_EnableTeamAlarm = Net_Steff_EnableTeamAlarm;
+								}
+							}
+						}
+					}
+				}
+				
+				// Capturing gauge
+				declare ShowGauge = False;
+				foreach (Index => Pole in BlockPoles) {
+					if (Pole.Gauge.Speed == 0) continue;
+					if (Captured.exists(Pole.Id)) {
+						if (Pole.Gauge.ValueReal >= 1.) {
+							continue;
+						} else {
+							declare Removed = Captured.remove(Pole.Id);
+						}
+					}
+					declare Value = MathLib::FloorInteger(Pole.Gauge.ValueReal * 100.);
+					if (Value <= 0) continue;
+					if (Value >= 100 && !Pole.Captured) {
+						Value -= 1;
+					}
+					Label_Capturing.Value = Value^"%";
+					Gauge_Capturing.SetRatio(Pole.Gauge.ValueReal);
+					Gauge_Capturing.SetClan(Pole.Gauge.Clan);
+					LastCapturedTime = Now;
+					if (Pole.Captured && !Captured.exists(Pole.Id)) {
+						Captured.add(Pole.Id);
+					}
+					break;
+				}
+				if (LastCapturedTime + 500 > Now) {
+					ShowGauge = True;
+				} else {
+					LastCapturedTime = -1;
+				}
+				Frame_Capturing.Visible = (ShowGauge && Net_Steff_StartTime < ArenaNow && Net_Steff_StartTime > 0
+					&& UI.GaugeRatio <= 0. && UI.UISequence == CUIConfig::EUISequence::Playing);
+			}
+		}
+		--></script>
+		<frame id="Frame_Capturing" hidden="1">
+			<label id="Label_Capturing" posn="0 -25" scale="2" textprefix="$o" halign="center" valign="center2"/>
+			<gauge id="Gauge_Capturing" posn="0 -35" sizen="110 8" style="EnergyBar" halign="center" valign="center2"/>
+		</frame>""";
+	return Manialink;
+}
+
+// Update net variables for extra layer
+Void Steff_UpdateLayerExtra() {
+	declare netwrite Boolean Net_Steff_ShowCapture for Teams[0];
+	declare netwrite Integer Net_Steff_StartTime for Teams[0];
+	
+	Net_Steff_ShowCapture = (StartTime > 0 && Now < EndTime && UIManager.UIAll.GaugeRatio <= 0. && !MB_StopTurn);
+	Net_Steff_StartTime = StartTime;
+	
+	foreach (Player in AllPlayers) {
+		// Team changes
+		declare LastRequestedClan for Player = Player.RequestedClan;
+		if (LastRequestedClan != Player.RequestedClan) {
+			LastRequestedClan = Player.RequestedClan;
+			if (Teams.existskey(Player.RequestedClan-1)) {
+				declare Message = "$<$f80!!!$> $<"^Player.Name^"$> changed to $<"^Teams[Player.RequestedClan-1].ColorizedName^"$>!";
+				Steff_SendTeamChange(Message);
+			}
+		}
+		
+		// Team alarm
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI == Null) continue;
+		declare netread Net_Steff_EnableTeamAlarm for UI = False;
+		declare EnableTeamAlarm for UI = False;
+		if (EnableTeamAlarm != Net_Steff_EnableTeamAlarm) {
+			EnableTeamAlarm = Net_Steff_EnableTeamAlarm;
+			declare Color = "$f00";
+			declare Status = "disabled";
+			if (EnableTeamAlarm) {
+				Color = "$0f0";
+				Status = "enabled";
+			}
+			declare Message = "$<$f80!!!$> "^Color^"Team Alarm "^Status^"!";
+			UI.SendChat(Message);
+		}
+	}
+}

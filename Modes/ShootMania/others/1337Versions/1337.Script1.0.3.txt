@@ -1,0 +1,1333 @@
+/****************************************
+*	1337 Game Mode (Custom Elite)		*
+*	Author:		steeffeen				*
+*	Contact:	schteffens@gmail.com	*
+****************************************/
+
+#Extends "Modes/ShootMania/ModeBase.Script.txt"
+
+#Const	CompatibleMapTypes	"EliteArena,HeroesArena,RoyalArena"
+#Const	Version				"1.0.3 (2013-03-27)"
+
+#Const	Description			"Practice your $<$08fElite$> skills in a Free-For-All match!\nOne of the players has to attack while the other players have to defend."
+
+/* INCLUDES */
+#Include "MathLib" as MathLib
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Interface.Script.txt" as Interface
+#Include "Libs/Nadeo/Victory.Script.txt" as Victory
+#Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+#Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
+#Include "Libs/Nadeo/ShootMania/WarmUpSimple.Script.txt" as WarmUp
+
+/* SETTINGS */
+// Rounds
+#Setting	S_PointsLimit			60		as _("Points limit to win a map")
+#Setting	S_TimeLimit				45		as _("Time limit per round (seconds)")
+#Setting	S_TimeLimitCapturing	15		as _("Time limit to capture the goal (seconds)")
+// Gameplay
+#Setting	S_CaptureTime			1.5		as _("Time needed to capture goals (seconds)")
+#Setting	S_LaserAttackers		True	as _("Attackers get lasers (otherwise rockets)")
+#Setting	S_FriendlyFire			False	as _("Friendly Fire (Damage team mates)")
+#Setting	S_Beta2Gameplay			False	as _("Use Beta2 Gameplay")
+#Setting	S_MaxDefenderCount		3		as _("Maximal count of defenders")
+#Setting	S_NbBots				0		as _("Number of bots")
+#Setting	S_UseAmmoBonusOnHit		True	as _("Grant ammunition reload on hits")
+// WarmUp
+#Setting	S_ForceWarmUp			False	as _("Force warming up before each map")
+
+/* CONSTANTS */
+#Const	C_LogEnabled				False		// Enable/disable logging
+// UI
+#Const	C_UITickInterval			250			// Interval of UI refreshes
+#Const	C_NearMissDist				1.0			// Max distance to show the near-miss message
+#Const	C_HideLayersAtMapEnd		True		// Hides custom layers at map end
+#Const	C_TeamsLayerAtTop			False		// Shows playerlist (if enabled) at the top of the screen
+#Const	C_AnnounceHeadshots			True		// Plays headshot sound if you hit someones head with the laser
+// Gameplay
+#Const	C_ForcedAttackerArmor		0			// Force a specific amount of armor for the attacker (1, 2, 3, ...)
+#Const	C_AttackerAmmoGain			1.0			// Attacker ammunition gain rate
+#Const	C_DefenderAmmoGain			1.0			// Defender ammunition gain rate
+#Const	C_UseLaserVsBullets			True		// Whether lasers can destroy rockets
+#Const	C_ExtraTimePerDefender		5			// Extra time in seconds for each additional defender (>3)
+#Const	C_DecreasedTimePerDefender	10			// Decreased time in seconds for each missing defender (<3)
+// Texts
+#Const	C_AttackerTeamName			"Attacker"
+#Const	C_DefendersTeamName			"Defenders"
+
+/* GLOBALES */
+declare Integer G_LastUIUpdate;					// Time of last UI update
+declare Integer G_LastBigMessage;				// Time of last big message
+declare Integer G_LastStatusMessage;			// Time of last status message
+declare Ident G_AttackerId;						// Id of currently attacking player
+declare Integer G_AttackingClan;				// Currently attacking clan
+declare Ident[] G_DefendingPlayerIds;			// IDs of currently defending players
+declare Boolean G_CapturingPossible;			// Whether it's possible to capture the goal
+declare Integer G_CountdownEndTime;				// Countdown end time
+declare Integer[Ident] G_AttackRounds;			// Attack rounds per player
+declare Integer[Ident] G_DefendRounds;			// Defend rounds per player
+declare Integer G_MaxDefenderCount;				// Maximal count of defenders
+declare CUILayer G_LayerScoresTableExtension;	// Layer for ScoresTableExtension
+declare Real G_LongestLaserDist;				// Distance of longest laser shot
+declare Text G_LongestLaserName;				// Name of longest laser shooter
+declare Text[] G_PlayingPlayersLogins;			// Logins of all currently playing players
+// Cache
+declare Integer Cache_S_PointsLimit;			// Cache for S_PointsLimit
+declare Boolean Cache_S_LaserAttackers;			// Cache for S_LaserAttackers
+
+/*****************************************************
+	EXTENSIONS
+*****************************************************/
+***StartServer***
+***
+log("1337.Script.txt loaded!");
+log("Version: "^Version);
+
+MB_UseLogging = C_LogEnabled;
+
+// Cache
+Cache_S_PointsLimit = S_PointsLimit;
+Cache_S_LaserAttackers = S_LaserAttackers;
+
+// Game settings
+UseClans = True;
+UseForcedClans = True;
+UseLaserVsBullets = C_UseLaserVsBullets;
+
+// Init variables
+MB_UseSectionRound = True;
+
+// Rules
+CreateRules();
+
+// Scores table
+declare LayerScores <=> UIManager.UILayerCreate();
+LayerScores.Type = CUILayer::EUILayerType::ScoresTable;
+// Teams layer
+declare LayerTeams <=> UIManager.UILayerCreate();
+if (C_TeamsLayerAtTop) {
+	LayerTeams.ManialinkPage = """
+		<playerlist posn="-107 90" halign="left" valign="top" style="" substyle="Small" lines="5" columns="2" team="1" status="Playing"/>
+		<playerlist posn="107 90" halign="right" valign="top" style="" substyle="Small" lines="5" columns="2" team="2" status="Playing"/>""";
+} else {
+	Interface::SetLayerTeams(LayerTeams);
+}
+// Position layer
+declare LayerPosition <=> UIManager.UILayerCreate();
+Interface::SetLayerPosition(LayerPosition);
+// Match information layer
+declare LayerInformation <=> UIManager.UILayerCreate();
+LayerInformation.ManialinkPage = GetLayerInformation();
+// Markers layer
+declare LayerMarkers <=> UIManager.UILayerCreate();
+LayerMarkers.Type = CUILayer::EUILayerType::Markers;
+LayerMarkers.ManialinkPage = GetMarkersLayerManialink();
+***
+
+***StartMap***
+***
+XmlRpc.SendCallback("beginMap", "");
+
+Mode::Ladder_OpenMatch_All();
+
+// UI
+UIManager.ResetAll();
+UIManager.UIAll.ScoreTableOnlyManialink = True;
+UIManager.UIAll.NoticesFilter_HideMapWarning = True;
+SM::SetupDefaultVisibility();
+// Layers
+LayerScores.IsVisible = True;
+UIManager.UIAll.UILayers.add(LayerScores);
+LayerTeams.IsVisible = True;
+UIManager.UIAll.UILayers.add(LayerTeams);
+LayerInformation.IsVisible = True;
+UIManager.UIAll.UILayers.add(LayerInformation);
+LayerMarkers.IsVisible = True;
+UIManager.UIAll.UILayers.add(LayerMarkers);
+SpawnScreen::AttachRules();
+
+// Prepare match
+Score::MatchBegin();
+Victory::MatchBegin();
+SetNbFakePlayers(S_NbBots, 0);
+
+// Initialize values
+G_LastUIUpdate = 0;
+G_LastBigMessage = 0;
+G_LastStatusMessage = 0;
+G_AttackingClan = 0;
+G_LongestLaserDist = 0.0;
+G_LongestLaserName = "";
+G_AttackRounds.clear();
+G_DefendRounds.clear();
+foreach (Score in Scores) {
+	declare Integer WonAttackRounds for Score;
+	WonAttackRounds = 0;
+	declare Integer DefendHits for Score;
+	DefendHits = 0;
+}
+foreach (User in Users) {
+	declare Integer PlayerClan for User;
+	PlayerClan = 0;
+}
+LayerScores.ManialinkPage = GetScoresTable();
+
+// Prepare map
+foreach (Base in Bases) {
+	Base.IsActive = True;
+	Base.Clan = 0;
+}
+// Prepare markers
+declare Markers = "";
+foreach (Pole in BlockPoles) {
+	Markers ^= """<marker pos="{{{Pole.Position[0]}}} {{{Pole.Position[1]+24}}} {{{Pole.Position[2]}}}" manialinkframeid="Pole_Marker{{{Pole.Id}}}"/>""";
+}
+UIManager.UIAll.Hud3dMarkers = Markers;
+
+// WarmUp
+if (S_ForceWarmUp || PlayersNbTotal < 2) {
+	UseClans = False;
+	LayerScores.IsVisible = False;
+	UIManager.UIAll.ScoreTableOnlyManialink = False;
+	
+	WarmUp::Initialize(15);
+	WarmUp::SetMinimumPlayersNumber(2);
+	WarmUp::Start();
+	
+	LayerScores.IsVisible = True;
+	UIManager.UIAll.ScoreTableOnlyManialink = True;
+}
+***
+
+***StartRound***
+***
+XmlRpc.SendCallback("beginRound", GetRankings());
+
+// UI
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+
+SM::UnspawnAllPlayers();
+Score::RoundBegin();
+Victory::RoundBegin();
+SetNbFakePlayers(S_NbBots, 0);
+
+// WarmUp check
+if (PlayersNbTotal < 2) {
+	UseClans = False;
+	LayerScores.IsVisible = False;
+	UIManager.UIAll.ScoreTableOnlyManialink = False;
+	
+	WarmUp::Initialize(0);
+	WarmUp::SetMinimumPlayersNumber(2);
+	WarmUp::Start();
+	
+	LayerScores.IsVisible = True;
+	UIManager.UIAll.ScoreTableOnlyManialink = True;
+}
+
+// Prepare next round
+PrepareNextRound();
+
+// Announce attacking player
+if (Players.existskey(G_AttackerId)) {
+	UIManager.UIAll.BigMessage = """$<{{{Players[G_AttackerId].Name}}}$> is attacking!""";
+	G_LastBigMessage = Now;
+	UIManager.UIAll.SendNotice(
+		"",
+		CUIConfig::ENoticeLevel::MapInfo, Null, CUIConfig::EAvatarVariant::Default, 
+		CUIConfig::EUISound::StartRound, 0);
+}
+
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+***
+
+***OnNewPlayer***
+***
+// Prepare UI for the new player
+declare UI <=> UIManager.GetUI(Player);
+if (UI != Null) {
+	UI.UILayers.clear();
+	UI.UILayers.add(LayerPosition);
+	
+	InitPlayer(Player, False);
+}
+***
+
+***OnNewSpectator***
+***
+// Prepare UI for the new spectator
+declare UI <=> UIManager.GetUI(Spectator);
+if (UI != Null) {
+	UI.UILayers.clear();
+	
+	// Spectating
+	UI.SpectatorForcedClan = -1;
+}
+***
+
+***PlayLoop***
+***
+// Update settings
+CheckScriptSettings();
+
+G_PlayingPlayersLogins.clear();
+// Perform actions for each player
+foreach (Player in Players) {
+	G_PlayingPlayersLogins.add(Player.Login);
+	switch (Player.SpawnStatus) {
+		case CSmPlayer::ESpawnStatus::NotSpawned: {
+			// Player not spawned -> Spawn him!
+			if (!Player.RequestsSpectate && Now < StartTime) {
+				MySpawnPlayer(Player);
+			}
+		}
+	}
+}
+
+// Check for captures
+foreach (Pole in BlockPoles) {
+	if (G_CapturingPossible) {
+		Pole.Base.Clan = G_AttackingClan;
+		Pole.Gauge.Clan = G_AttackingClan;
+		Pole.Gauge.Max = MathLib::NearestInteger(S_CaptureTime * 1000);
+		declare Speed = 0;
+		foreach (PlayerId in Pole.Sector.PlayersIds) {
+			if (Players.existskey(PlayerId) && Players[PlayerId].CurrentClan == G_AttackingClan) {
+				Speed += 1;
+			}
+		}
+		Pole.Gauge.Speed = Speed;
+	} else {
+		if (Now >= StartTime) {
+			Pole.Gauge.Speed = -1;
+		}
+	}
+}
+
+// Handle pending events
+foreach (Event in PendingEvents) {
+	switch (Event.Type) {
+		case CSmModeEvent::EType::OnHit: {
+			if (Event.Shooter == Null || Event.Victim == Null) {
+				// Discard buggy event
+				Discard(Event);
+			} else {
+				if (Event.Shooter == Event.Victim) {
+					// Discard self damage
+					Discard(Event);
+				} else {
+					if (Event.Shooter.CurrentClan == Event.Victim.CurrentClan) {
+						if (S_FriendlyFire) {
+							// PassOn team hits
+							declare Points = -3;
+							Event.ShooterPoints = Points;
+							IncreaseScore(Event.Shooter.Id, Points);
+							PassOn(Event);
+						} else {
+							// Discard team hits
+							Discard(Event);
+						}
+					} else {
+						Event.Damage = 100;
+						// Grant points for the hit
+						declare Points = 1;
+						Event.ShooterPoints = Points;
+						IncreaseScore(Event.Shooter.Id, Points);
+						if (Event.Shooter.Id != G_AttackerId) {
+							// Increase defend hits
+							if (Event.Shooter.Score != Null) {
+								declare DefendHits for Event.Shooter.Score = 0;
+								DefendHits += 1;
+							}
+							if (Event.Victim.Armor >= 200) {
+								// Announce left armor count
+								declare ArmorLeft = (Event.Victim.Armor-100)/100;
+								if (ArmorLeft > 0) {
+									UIManager.UIAll.SendNotice(
+										"""{{{ArmorLeft}}} armor left!""",
+										CUIConfig::ENoticeLevel::MapInfo, Null, CUIConfig::EAvatarVariant::Default, 
+										CUIConfig::EUISound::TiePoint, 5-ArmorLeft);
+								}
+							}
+						}
+						if (!Event.Victim.IsFakePlayer && !Event.Shooter.IsFakePlayer) {
+							XmlRpc.SendCallback("playerHit", "Victim:"^Event.Victim.Login^";Shooter:"^Event.Shooter.Login^";1;");
+						}
+						PassOn(Event);
+					}
+				}
+			}
+		}
+		case CSmModeEvent::EType::OnArmorEmpty: {
+			if (Event.Victim != Null) {
+				if (Event.Shooter != Null && Event.Shooter.Id == G_AttackerId) {
+					// Announce shot distance
+					declare Distance = MathLib::NearestInteger(10*MathLib::Distance(Event.Shooter.Position, Event.Victim.Position))/10.0;
+					if (Distance > G_LongestLaserDist) {
+						G_LongestLaserDist = Distance;
+						G_LongestLaserName = Event.Shooter.Name;
+					}
+					UIManager.UIAll.SendNotice(
+						"""{{{Distance}}}m hit!""",
+						CUIConfig::ENoticeLevel::PlayerInfo, Null, CUIConfig::EAvatarVariant::Default, 
+						CUIConfig::EUISound::Silence, 0);
+				}
+				if (Event.Victim.Id != G_AttackerId) {
+					// Announce left defender count
+					declare DefenderLeft = ClansNbPlayersAlive[3-G_AttackingClan]-1;
+					if (DefenderLeft > 0) {
+						UIManager.UIAll.SendNotice(
+							"""{{{DefenderLeft}}} defender left!""",
+							CUIConfig::ENoticeLevel::MapInfo, Null, CUIConfig::EAvatarVariant::Default, 
+							CUIConfig::EUISound::TieBreakPoint, 5-DefenderLeft);
+					}
+					// Announce headshot?
+					DoHeadShot(Event);
+				}
+				if (!Event.Victim.IsFakePlayer) {
+					if (Event.Shooter == Null) {
+						XmlRpc.SendCallback("playerDeath", Event.Victim.Login);
+					} else {
+						if (!Event.Shooter.IsFakePlayer) {
+							XmlRpc.SendCallback("playerKill", "Victim:"^Event.Victim.Login^";Shooter:"^Event.Shooter.Login);
+						}
+					}
+				}
+			}
+			PassOn(Event);
+		}
+		case CSmModeEvent::EType::OnCapture: {
+			// Goal captured - Attackers win
+			Victory::SetRoundWinnerIfNoWinner(G_AttackingClan);
+			if (Players.existskey(G_AttackerId) && Event.BlockPole.Sector.PlayersIds.exists(G_AttackerId)) {
+				UIManager.UIAll.SendNotice(
+					"""$<{{{Players[G_AttackerId].Name}}}$> captured the goal!""",
+					CUIConfig::ENoticeLevel::MatchInfo, Null, CUIConfig::EAvatarVariant::Default, 
+					CUIConfig::EUISound::Capture, 0);
+				if (!Players[G_AttackerId].IsFakePlayer) {
+					XmlRpc.SendCallback("poleCapture", Players[G_AttackerId].Login);
+				}
+				PassOn(Event);
+			} else {
+				Event.BlockPole.Gauge.ValueReal = 0.999;
+				Discard(Event);
+			}
+		}
+		case CSmModeEvent::EType::OnNearMiss: {
+			// Near miss
+			if (C_NearMissDist >= 0 && Event.MissDist <= C_NearMissDist) {
+				declare Message = GetNearMissMessage(Event);
+				if (Message != "") {
+					UIManager.UIAll.StatusMessage = Message;
+					G_LastStatusMessage = Now;
+				}
+			}
+			PassOn(Event);
+		}
+		default: {
+			PassOn(Event);
+		}
+	}
+}
+
+// UI
+if (G_LastUIUpdate + C_UITickInterval < Now) {
+	G_LastUIUpdate = Now;
+	
+	// Update scores
+	LayerScores.ManialinkPage = GetScoresTable();
+	
+	// Clear big message
+	if (G_LastBigMessage != 0 && G_LastBigMessage + 4000 < Now) {
+		G_LastBigMessage = 0;
+		UIManager.UIAll.BigMessage = "";
+	}
+	
+	// Clear big message
+	if (G_LastStatusMessage != 0 && G_LastStatusMessage + 4000 < Now) {
+		G_LastStatusMessage = 0;
+		UIManager.UIAll.StatusMessage = "";
+	}
+	
+	// Player UI
+	foreach (Player in Players) {
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI != Null) {
+			// Position layer
+			UpdateLayerPosition(Player);
+			
+			// Information layer
+			UpdateLayerInformation(UI, (Player.Id == G_AttackerId));
+	
+			// Spectating
+			UI.SpectatorForcedClan = Player.CurrentClan;
+			
+			// Status message
+			declare LastStatusMessage for Player = -1;
+			if (LastStatusMessage != -1 && LastStatusMessage >= G_LastStatusMessage && LastStatusMessage + 4000 < Now) {
+				UI.StatusMessage = "";
+				LastStatusMessage = -1;
+			}
+		}
+	}
+	
+	// Spectator UI
+	foreach (Spectator in Spectators) {
+		declare UI <=> UIManager.GetUI(Spectator);
+		if (UI != Null) {
+			// Information layer
+			UpdateLayerInformation(UI, False);
+			
+			// Status message
+			declare LastStatusMessage for Spectator = -1;
+			if (LastStatusMessage != -1 && LastStatusMessage >= G_LastStatusMessage && LastStatusMessage + 4000 < Now) {
+				UI.StatusMessage = "";
+				LastStatusMessage = -1;
+			}
+		}
+	}
+}
+
+// Activate goal
+if (Now >= G_CountdownEndTime) {
+	if (!G_CapturingPossible) {
+		G_CapturingPossible = True;
+		UIManager.UIAll.CountdownEndTime = -1;
+		UIManager.UIAll.SendNotice(
+			"", CUIConfig::ENoticeLevel::MatchInfo,
+			Null, CUIConfig::EAvatarVariant::Default,
+			CUIConfig::EUISound::PhaseChange, 0);
+	}
+	if (UIManager.UIAll.StatusMessage == "") {
+		UIManager.UIAll.StatusMessage = "The goal can now be captured!";
+	}
+}
+
+// Check round end conditions
+if (Now >= EndTime) {
+	// Time is up - Defenders win
+	Victory::SetRoundWinnerIfNoWinner(3-G_AttackingClan);
+} else {
+	if (ClansNbPlayersAlive[G_AttackingClan] <= 0) {
+		// Attacker eliminated
+		Victory::SetRoundWinnerIfNoWinner(3-G_AttackingClan);
+	} else {
+		if (ClansNbPlayersAlive[3-G_AttackingClan] <= 0) {
+			// Defender eliminated
+			Victory::SetRoundWinnerIfNoWinner(G_AttackingClan);
+		}
+	}
+}
+if (!MB_StopRound && !Victory::NoRoundWinner()) {
+	// Round winner found
+	MB_StopRound = True;
+}
+***
+
+***EndRound***
+***
+XmlRpc.SendCallback("endRound", GetRankings());
+
+LayerScores.ManialinkPage = GetScoresTable();
+EndTime = Now;
+foreach (Pole in BlockPoles) {
+	Pole.Gauge.Speed = 0;
+}
+UIManager.UIAll.StatusMessage = "";
+MB_Sleep(1000);
+
+// Evaluate round
+declare Message = "Round Draw";
+if (Victory::IsRoundWinner(G_AttackingClan) && Players.existskey(G_AttackerId)) {
+	// Attacker won
+	Message = """$<{{{Players[G_AttackerId].Name}}}$> wins the round!""";
+	if (Players.existskey(G_AttackerId) && !Players[G_AttackerId].IsFakePlayer) {
+		XmlRpc.SendCallback("attackerWon", Players[G_AttackerId].Login);
+	}
+	if (Players[G_AttackerId].Score != Null) {
+		declare WonAttackRounds for Players[G_AttackerId].Score = 0;
+		WonAttackRounds += 1;
+		IncreaseScore(G_AttackerId, 4+G_DefendingPlayerIds.count);
+	}
+} else {
+	// Defenders won
+	Message = """$<{{{Teams[2-G_AttackingClan].ColorText}}}Defenders$> win the round!""";
+	foreach (DefenderId in G_DefendingPlayerIds) {
+		IncreaseScore(DefenderId, 2);
+		if (Players.existskey(DefenderId) && Players[DefenderId].Armor > 0) {
+			IncreaseScore(DefenderId, 2);
+			if (!Players[DefenderId].IsFakePlayer) {
+				XmlRpc.SendCallback("playerSurvival", Players[DefenderId].Login);
+			}
+		}
+	}
+	
+}
+UIManager.UIAll.BigMessage = Message;
+G_LastBigMessage = Now;
+
+LayerScores.ManialinkPage = GetScoresTable();
+
+// Clear counts arrays
+foreach (PlayerId => Rounds in G_AttackRounds) {
+	if (!Players.existskey(PlayerId) && !Spectators.existskey(PlayerId)) {
+		declare Temp = G_AttackRounds.removekey(PlayerId);
+	}
+}
+foreach (PlayerId => Rounds in G_DefendRounds) {
+	if (!Players.existskey(PlayerId) && !Spectators.existskey(PlayerId)) {
+		declare Temp = G_DefendRounds.removekey(PlayerId);
+	}
+}
+
+MB_Sleep(1500);
+
+SM::UnspawnAllPlayers();
+UIManager.UIAll.CountdownEndTime = -1;
+
+UseClans = False;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+
+MB_Sleep(2000);
+
+Score::RoundEnd();
+Victory::RoundEnd();
+
+// Check match end conditions
+foreach (Score in Scores) {
+	if (Score.Points >= S_PointsLimit) {
+		// Match winner found
+		MB_StopMap = True;
+		break;
+	}
+}
+***
+
+***EndMap***
+***
+XmlRpc.SendCallback("endMap", GetRankings());
+
+Score::MatchEnd();
+Victory::MatchEnd();
+
+// UI
+UseClans = False;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
+if (C_HideLayersAtMapEnd) {
+	LayerTeams.IsVisible = False;
+	LayerInformation.IsVisible = False;
+	LayerMarkers.IsVisible = False;
+}
+LayerScores.IsVisible = False;
+UIManager.UIAll.ScoreTableOnlyManialink = False;
+
+// Announce victorious clan
+declare Message = "Match Draw";
+declare CUser Winner <=> Null;
+declare MaxPoints = 0;
+foreach (Score in Scores) {
+	if (Score.Points > MaxPoints && G_PlayingPlayersLogins.exists(Score.User.Login)) {
+		MaxPoints = Score.Points;
+		Winner <=> Score.User;
+	}
+}
+if (Winner != Null) {
+	Message = """$<{{{Winner.Name}}}$> wins the map!""";
+}
+UIManager.UIAll.BigMessage = Message;
+G_LastBigMessage = Now;
+
+MB_Sleep(3000);
+
+Mode::Ladder_CloseMatch();
+***
+
+***EndServer***
+***
+
+// UI Cleanup
+UIManager.UILayerDestroy(LayerTeams);
+UIManager.UILayerDestroy(LayerInformation);
+UIManager.UILayerDestroy(LayerScores);
+SpawnScreen::DestroyRules();
+***
+
+/*****************************************************
+	FUNCTIONS
+*****************************************************/
+
+// Get a random spawn out of the spawns assigned to a given clan
+Ident GetRandomSpawn(Integer _Clan) {
+	declare Index = 0;
+	declare Ident[Integer] Spawns;
+	foreach (Spawn in BlockSpawns) {
+		if (Spawn.Base.Clan == _Clan) {
+			Spawns[Index] = Spawn.Id;
+			Index += 1;
+		}
+	}
+	
+	if (Spawns.count > 0) {
+		return Spawns[MathLib::Rand(0, Spawns.count-1)];
+	}
+	
+	return NullId;
+}
+
+// Spawn player
+Void MySpawnPlayer(CSmPlayer _Player) {
+	if (C_LogEnabled) MB_Log("MySpawnPlayer("^_Player.Login);
+	
+	if (Now < StartTime && !_Player.RequestsSpectate) {
+		// Get spawn
+		declare Clan = 0;
+		if (G_AttackerId == _Player.Id) {
+			Clan = G_AttackingClan;
+		} else {
+			if (G_DefendingPlayerIds.exists(_Player.Id)) {
+				Clan = 3-G_AttackingClan;
+			}
+		}
+		declare SpawnId = GetRandomSpawn(Clan);
+		
+		// Allow only 1 nucleus
+		This.SetPlayerAmmoMax(_Player, CSmMode::EWeapon::Nucleus, 1);
+		
+		// Set values depending on player clan
+		if (SpawnId != NullId) {
+			if (_Player.Id == G_AttackerId) {
+				// Attacker
+				if (S_LaserAttackers) {
+					This.SetPlayerWeapon(_Player, CSmMode::EWeapon::Laser, False);
+				} else {
+					This.SetPlayerWeapon(_Player, CSmMode::EWeapon::Rocket, True);
+				}
+				_Player.AmmoGain = C_AttackerAmmoGain;
+				if (C_ForcedAttackerArmor > 0) {
+					_Player.ArmorMax = C_ForcedAttackerArmor * 100;
+				} else {
+					_Player.ArmorMax = G_DefendingPlayerIds.count * 100;
+				}
+				
+				// Spawn player
+				SM::SpawnPlayer(_Player, G_AttackingClan, BlockSpawns[SpawnId], StartTime);
+			} else {
+				// Defender
+				This.SetPlayerWeapon(_Player, CSmMode::EWeapon::Rocket, True);
+				_Player.AmmoGain = C_DefenderAmmoGain;
+				_Player.ArmorMax = 100;
+				
+				// Spawn player
+				SM::SpawnPlayer(_Player, 3-G_AttackingClan, BlockSpawns[SpawnId], StartTime);
+				
+				declare UI <=> UIManager.GetUI(_Player);
+				if (UI != Null) {
+					UI.StatusMessage = Teams[2-G_AttackingClan].ColorText^"You are defending!";
+					declare LastStatusMessage for _Player = -1;
+					LastStatusMessage = Now;
+				}
+			}
+		}
+	}
+}
+
+Integer GetNewAttacksRoundsCount(Integer[Ident] _RoundsArray) {
+	declare HighestValue = 0;
+	foreach (Id => Value in _RoundsArray) {
+		if (Value > HighestValue) {
+			HighestValue = Value;
+		}
+	}
+	return HighestValue;
+}
+
+// Init player
+Void InitPlayer(CSmPlayer _Player, Boolean _Forced) {
+	// Init atk/def values
+	if (_Forced) {
+		// Full init
+		G_AttackRounds[_Player.Id] = 0;
+		G_DefendRounds[_Player.Id] = 0;
+		declare LastAttackTime for _Player = 0;
+		LastAttackTime = Now;
+	} else {
+		// Only init if necessary
+		if (!G_AttackRounds.existskey(_Player.Id)) {
+			G_AttackRounds[_Player.Id] = GetNewAttacksRoundsCount(G_AttackRounds);
+		}
+		if (!G_DefendRounds.existskey(_Player.Id)) {
+			G_DefendRounds[_Player.Id] = GetNewAttacksRoundsCount(G_DefendRounds);
+		}
+	}
+}
+
+Void InitPlayer(CSmPlayer _Player) {
+	InitPlayer(_Player, False);
+}
+
+// Create spawn screen rules
+Void CreateRules() {
+	declare Rules = """
+{{{Description}}}""";
+	if (S_LaserAttackers) {
+		Rules ^= """
+The defenders have rockets and the attacker gets a laser!
+""";
+	}
+	Rules ^= """
+You can get points for eliminating opponents and succesful rounds.
+Defenders will get $<$f802$> extra points for victorious rounds (and $<$f802$> additional points if they survived).
+The attacker gets points depending on the number of defenders.
+
+The first player to reach $<$f80{{{S_PointsLimit}}}$> points wins the map!""";
+	SpawnScreen::CreateRules("1337", Rules, False);
+}
+
+// Checks for changed script settings and performs updates
+Void CheckScriptSettings() {
+	declare UpdateRules = False;
+	
+	// Check points limit
+	if (Cache_S_PointsLimit != S_PointsLimit) {
+		Cache_S_PointsLimit = S_PointsLimit;
+		UpdateRules = True;
+	}
+	
+	// Check laser attackers
+	if (Cache_S_LaserAttackers != S_LaserAttackers) {
+		Cache_S_LaserAttackers = S_LaserAttackers;
+		UpdateRules = True;
+	}
+	
+	// Check max defender count
+	if (S_MaxDefenderCount <= 0) {
+		G_MaxDefenderCount = Players.count+1;
+	} else {
+		G_MaxDefenderCount = S_MaxDefenderCount;
+	}
+	
+	// Update gameplay version
+	if (S_Beta2Gameplay) {
+		GameplayVersion = 1;
+	} else {
+		GameplayVersion = 0;
+	}
+	
+	// Check ammo bonus on hit
+	UseAmmoBonusOnHit = S_UseAmmoBonusOnHit;
+	
+	// Update rules
+	if (UpdateRules) {
+		CreateRules();
+	}
+}
+
+// Check if clublink defined team names
+Boolean TeamsHaveClublinkNames() {
+	for (Index, 0, 1) {
+		switch (Teams[Index].Name) {
+			case "Blue": {}
+			case "Red": {}
+			case C_AttackerTeamName: {}
+			case C_DefendersTeamName: {}
+			default: {
+				return True;
+			}
+		}
+	}
+	return False;
+}
+
+// Change sides and stuff
+Void PrepareNextRound() {
+	if (C_LogEnabled) MB_Log("PrepareNextRound");
+	
+	CheckScriptSettings();
+	SM::UnspawnAllPlayers();
+	G_CapturingPossible = False;
+	G_AttackerId = NullId;
+	UseClans = True;
+	
+	// Get attacking clan
+	G_AttackingClan = MathLib::Rand(1,2);
+	
+	// Set team names
+	if (!TeamsHaveClublinkNames()) {
+		Teams[G_AttackingClan-1].Name = C_AttackerTeamName;
+		Teams[2-G_AttackingClan].Name = C_DefendersTeamName;
+	}
+	
+	// Get attack player
+	declare FewestAttackRounds = -2;
+	declare LatestAttackTime = Now;
+	foreach (Player in Players) {
+		if (!Player.RequestsSpectate) {
+			InitPlayer(Player);
+			declare LastAttackTime for Player = 0;
+			if (G_AttackRounds[Player.Id] < FewestAttackRounds || FewestAttackRounds < -1 || G_AttackRounds[Player.Id] == FewestAttackRounds && LastAttackTime < LatestAttackTime) {
+				G_AttackerId = Player.Id;
+				FewestAttackRounds = G_AttackRounds[Player.Id];
+			}
+		}
+	}
+	
+	// Get defending players
+	declare Ident[Integer] FewestDefendRoundPlayerIds;
+	G_DefendingPlayerIds = Ident[];
+	
+	foreach (Player in Players) {
+		if (Player.Id != G_AttackerId && !Player.RequestsSpectate) {
+			// Fill empty defender spots
+			for (Index, 1, G_MaxDefenderCount) {
+				if (!FewestDefendRoundPlayerIds.existskey(Index)) {
+					FewestDefendRoundPlayerIds[Index] = Player.Id;
+					break;
+				}
+			}
+			if (!Player.IsFakePlayer) {
+				// Replace players who have played more often
+				if (!FewestDefendRoundPlayerIds.exists(Player.Id)) {
+					foreach (Index => PlayerId in FewestDefendRoundPlayerIds) {
+						if (G_DefendRounds[Player.Id] < G_DefendRounds[PlayerId]) {
+							FewestDefendRoundPlayerIds[Index] = Player.Id;
+							break;
+						}
+					}
+				}
+				// Replace bots by players
+				if (!FewestDefendRoundPlayerIds.exists(Player.Id)) {
+					foreach (Index => PlayerId in FewestDefendRoundPlayerIds) {
+						if (Players[PlayerId].IsFakePlayer) {
+							FewestDefendRoundPlayerIds[Index] = Player.Id;
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	foreach (PlayerId in FewestDefendRoundPlayerIds) {
+		G_DefendingPlayerIds.add(PlayerId);
+	}
+	
+	// Set round times
+	StartTime = Now + 3500;
+	declare TimeLimit = S_TimeLimit;
+	if (G_DefendingPlayerIds.count > 3) {
+		TimeLimit += (G_DefendingPlayerIds.count - 3) * C_ExtraTimePerDefender;
+	} else {
+		if (G_DefendingPlayerIds.count < 3) {
+			TimeLimit -= (3 - G_DefendingPlayerIds.count) * C_DecreasedTimePerDefender;
+		}
+	}
+	G_CountdownEndTime = StartTime + TimeLimit * 1000;
+	UIManager.UIAll.CountdownEndTime = G_CountdownEndTime;
+	EndTime = G_CountdownEndTime + S_TimeLimitCapturing * 1000;
+	
+	// Assign spawns & poles
+	foreach (Spawn in BlockSpawns) {
+		switch (Spawn.Tag) {
+			case "SpawnAttack": {
+				Spawn.Base.Clan = G_AttackingClan;
+			}
+			case "SpawnDefense": {
+				Spawn.Base.Clan = 3-G_AttackingClan;
+			}
+			default: {
+				declare Assigned = False;
+				for (Clan, 1, 2) {
+					if (GetRandomSpawn(Clan) == NullId) {
+						Spawn.Base.Clan = Clan;
+						Assigned = True;
+					}
+				}
+				if (!Assigned) {
+					Spawn.Base.Clan = MathLib::Rand(1, 2);
+				}
+			}
+		}
+	}
+	foreach (Pole in BlockPoles) {
+		Pole.Gauge.Max = TimeLimit * 1000;
+		Pole.Gauge.ValueReal = 1.0;
+		Pole.Base.Clan = 0;
+		Pole.Gauge.Clan = 3-G_AttackingClan;
+	}
+	
+	// Set players clans
+	foreach (Player in Players) {
+		declare PlayerClan for Player.User = 0;
+		
+		if (Player.Id == G_AttackerId) {
+			// Attacker
+			This.SetPlayerClan(Player, G_AttackingClan);
+			PlayerClan = G_AttackingClan;
+			G_AttackRounds[Player.Id] += 1;
+			declare LastAttackTime for Player = 0;
+			LastAttackTime = Now;
+			
+			if (!Player.IsFakePlayer) {
+				XmlRpc.SendCallback("playerActive", Player.Login);
+			}
+		} else {
+			if (G_DefendingPlayerIds.exists(Player.Id)) {
+				// Defender
+				This.SetPlayerClan(Player, 3-G_AttackingClan);
+				PlayerClan = 3-G_AttackingClan;
+				G_DefendRounds[Player.Id] += 1;
+				
+				if (!Player.IsFakePlayer) {
+					XmlRpc.SendCallback("playerActive", Player.Login);
+				}
+			} else {
+				// Inactive
+				This.SetPlayerClan(Player, 0);
+				PlayerClan = 0;
+				
+				if (!Player.IsFakePlayer) {
+					XmlRpc.SendCallback("playerInactive", Player.Login);
+				}
+			}
+		}
+	}
+}
+
+// Update a player position UI
+Void UpdateLayerPosition(CSmPlayer _Player) {
+	declare UI <=> UIManager.GetUI(_Player);
+	if (UI != Null) {
+		declare LibInterface_LastPosCurrent for _Player = -1;
+		declare netwrite Integer Net_LibInterface_LayerInfoUpdate for UI;
+		declare netwrite Integer Net_LibInterface_PosTotal for UI;
+		declare netwrite Integer Net_LibInterface_PosCurrent for UI;
+		
+		Net_LibInterface_LayerInfoUpdate = Now;
+		Net_LibInterface_PosTotal = Scores.count;
+		Net_LibInterface_PosCurrent = Scores.keyof(_Player.Score) + 1;
+	}
+}
+
+// Generates information layer
+Text GetLayerInformation() {
+	return """<script><!--
+			#Include "MathLib" as MathLib
+			
+			main() {
+				declare Label_AtkArmor <=> (Page.GetFirstChild("AtkArmor") as CMlLabel);
+				declare Label_CapText <=> (Page.GetFirstChild("CapText") as CMlLabel);
+				declare Gauge_CapGauge <=> (Page.GetFirstChild("CapGauge") as CMlGauge);
+				
+				declare netread Net_Attacker for UI = False;
+				declare netread Net_AtkArmor for UI = -1;
+				declare netread Net_DefCount for UI = -1;
+				declare netread Net_CapturingPossible for UI = True;
+				
+				declare LastUIUpdate = 0;
+				
+				while (True) {
+					yield;
+					
+					if (LastUIUpdate + 300 < Now) {
+						LastUIUpdate = Now;
+						
+						// Update attacker armor or defender count
+						declare LabelText = "";
+						if (Net_Attacker && Net_DefCount >= 0) {
+							LabelText = "Defender Count: "^Net_DefCount;
+						} else {
+							if (Net_AtkArmor >= 0) {
+								LabelText = "Attacker Armor: "^Net_AtkArmor;
+							}
+						}
+						Label_AtkArmor.SetText(LabelText);
+						
+						// Capturing gauge
+						if (InputPlayer != Null) {
+							declare CSmPlayer GaugePlayer <=> Null;
+							if (False && GUIPlayer != Null) {
+								GaugePlayer <=> GUIPlayer;
+							} else {
+								GaugePlayer <=> InputPlayer;
+							}
+							if (GaugePlayer != Null && GaugePlayer.BlockPole != Null) {
+								Label_CapText.Visible = True;
+								declare CapText = "";
+								if (Net_CapturingPossible) {
+									CapText = MathLib::NearestInteger(GaugePlayer.BlockPole.Gauge.ValueReal*100)^"%";
+								} else {
+									if (GaugePlayer.BlockPole.Gauge.Speed != 0) {
+										CapText = (GaugePlayer.BlockPole.Gauge.Value/GaugePlayer.BlockPole.Gauge.Speed)/-1000^"s";
+									}
+								}
+								Label_CapText.Value = CapText;
+								
+								Gauge_CapGauge.Visible = True;
+								Gauge_CapGauge.SetRatio(GaugePlayer.BlockPole.Gauge.ValueReal);
+								Gauge_CapGauge.SetClan(GaugePlayer.BlockPole.Gauge.Clan);
+							} else {
+								Label_CapText.Visible = False;
+								Gauge_CapGauge.Visible = False;
+							}
+						}
+					}
+				}
+			}
+		--></script>
+		<frame>
+			<label id="CapText" textprefix="$o" scale="2" posn="0 -25" hidden="1" halign="center" valign="center"/>
+			<gauge id="CapGauge" posn="0 -35" sizen="110 8" style="EnergyBar" hidden="1" halign="center" valign="center"/>
+			
+			<label id="AtkArmor" posn="34 -79" scale="0.8" textcolor="fffd" halign="left" valign="bottom"/>
+		</frame>""";
+}
+
+// Updates information layer
+Void UpdateLayerInformation(CUIConfig _UI, Boolean _Attacker) {
+	declare netwrite Integer Net_AtkArmor for _UI;
+	if (Players.existskey(G_AttackerId)) {
+		Net_AtkArmor = Players[G_AttackerId].Armor / 100;
+	} else {
+		Net_AtkArmor = -1;
+	}
+	declare netwrite Integer Net_DefCount for _UI;
+	if (G_AttackingClan == 1 || G_AttackingClan == 2) {
+		Net_DefCount = ClansNbPlayersAlive[3-G_AttackingClan];
+	} else {
+		Net_DefCount = -1;
+	}
+	
+	declare netwrite Boolean Net_CapturingPossible for _UI;
+	if (EndTime > Now && G_CapturingPossible) {
+		Net_CapturingPossible = True;
+	} else {
+		Net_CapturingPossible = False;
+	}
+	
+	declare netwrite Boolean Net_Attacker for _UI;
+	Net_Attacker = _Attacker;
+}
+
+// Creates message for near miss
+Text GetNearMissMessage(CSmModeEvent _Event) {
+	// Catch invalid events
+	if (_Event.Type != CSmModeEvent::EType::OnNearMiss) return "";			// Wrong event type
+	if (_Event.Shooter == Null || _Event.Victim == Null) return "";			// Invalid players
+	if (_Event.Shooter.CurrentClan == _Event.Victim.CurrentClan) return "";	// Team mates
+	if (_Event.MissDist <= 0.0) return "";									// Invalid miss distance
+	
+	// Get message text
+	declare Message = "";
+	declare Dist = MathLib::NearestInteger(_Event.MissDist * 1000);
+	if (Dist >= 10) {
+		Message = (Dist/10.0)^"cm!";
+	} else {
+		Dist = MathLib::NearestInteger(_Event.MissDist * 10000);
+		if (Dist >= 10) {
+			Message = (Dist/10.0)^"mm!";
+		} else {
+			Dist = MathLib::NearestInteger(_Event.MissDist * 10000000);
+			Message = (Dist/10.0)^"µm!";
+		}
+	}
+	return TextLib::Compose(_("$<%1$> missed $<%2$> by %3"), _Event.Shooter.Name, _Event.Victim.Name, Message);
+}
+
+// Get region of users zone path
+Text GetRegion(CUser _User) {
+	if (_User == Null) {
+		return "";
+	}
+	declare ZonePath = "";
+	if (_User.ZonePath != "") {
+		declare ExplodeZonePath = TextLib::Split("|", _User.ZonePath);
+		if (ExplodeZonePath.existskey(1)) {
+			ZonePath = ExplodeZonePath[1];
+		}
+	}
+	if (ZonePath == "") {
+		ZonePath = "Other";
+	}
+	return ZonePath;
+}
+
+// Create score table
+Text GetScoresTable() {
+	// Get scores to be displayed
+	declare CSmScore[] ActualScores;
+	foreach (Score in Scores) {
+		if (G_PlayingPlayersLogins.exists(Score.User.Login)) {
+			ActualScores.add(Score);
+		}
+	}
+	
+	// Crate scoretable manialink
+	declare TableWidth = 190;
+	declare RowHeight = 10;
+	
+	declare Column = 0;
+	declare Row = 0;
+	declare Rank = 1;
+	
+	declare Manialink = """<script><!--
+			main() {
+				while (True) {
+					yield;
+					
+					foreach (Event in PendingEvents) {
+						switch (Event.Type) {
+							case CMlEvent::Type::MouseClick: {
+								ShowProfile(Event.ControlId);
+							}
+						}
+					}
+				}
+			}
+		--></script>
+		<frame posn="0 7">
+			<quad posn="0 -2" sizen="{{{TableWidth}}} 195" image="file://Media/Manialinks/Shootmania/Common/topsBg.dds" halign="center" valign="center"/>
+			<label posn="0 30.5" textprefix="$o" text="Rankings" scale="1.2" halign="center" valign="center"/>
+			<label posn="{{{-TableWidth*0.45}}} 32.5" text="Points Limit: {{{S_PointsLimit}}}" scale="0.55" halign="left" valign="top"/>
+			
+			<label posn="{{{-TableWidth*0.10}}} 24" text="Def" scale="0.45" halign="center" valign="bottom"/>
+			<label posn="{{{-TableWidth*0.07}}} 24" text="Atk" scale="0.45" halign="center" valign="bottom"/>
+			<label posn="{{{-TableWidth*0.03}}} 24" text="Score" scale="0.45" halign="center" valign="bottom"/>
+			
+			<label posn="{{{TableWidth*0.35}}} 24" text="Def" scale="0.45" halign="center" valign="bottom"/>
+			<label posn="{{{TableWidth*0.38}}} 24" text="Atk" scale="0.45" halign="center" valign="bottom"/>
+			<label posn="{{{TableWidth*0.42}}} 24" text="Score" scale="0.45" halign="center" valign="bottom"/>""";
+			
+	foreach (Score in ActualScores) {
+		declare PlayerClan for Score.User = 0;
+		declare Text BGColor1;
+		declare Text BGColor2;
+		switch (PlayerClan) {
+			case 1: {
+				BGColor1 = "118";
+				BGColor2 = "226";
+			}
+			case 2: {
+				BGColor1 = "811";
+				BGColor2 = "622";
+			}
+			default: {
+				BGColor1 = "000";
+				BGColor2 = "000";
+			}
+		}
+		Column = MathLib::NearestInteger((1.0 * Rank) / (1.0 * (ActualScores.count + 2.0)));
+		Row = (ActualScores.count+1) % ((ActualScores.count+1) / 2);
+		
+		Manialink ^= """
+			<frame posn="{{{(-1+Column)*TableWidth*0.45}}} {{{19-Row*RowHeight}}}">
+				<quad posn="0 0" sizen="{{{RowHeight*0.95}}} {{{RowHeight*0.95}}}" bgcolor="{{{BGColor1}}}c" halign="left" valign="center"/>
+				<label posn="{{{RowHeight*0.46}}} 0.5" text="{{{Rank}}}." scale="1.2" halign="center" valign="center"/>
+				
+				<quad posn="{{{RowHeight*0.9+0.1}}} 0" sizen="{{{TableWidth*0.4}}} {{{RowHeight*0.95}}}" bgcolor="{{{BGColor2}}}9" halign="left" valign="center" id="{{{Score.User.Login}}}" scriptevents="1"/>
+				<label posn="{{{RowHeight*0.9+2}}} {{{RowHeight*0.2}}}" sizen="{{{TableWidth*0.3}}} {{{RowHeight*0.8}}}" text="{{{Score.User.Name}}}" halign="left" valign="center"/>
+				<label posn="{{{RowHeight*0.9+2}}} {{{-RowHeight*0.4}}}" sizen="{{{TableWidth*0.3}}} {{{RowHeight*0.2}}}" text="Rank: {{{Score.User.LadderRank}}} ({{{GetRegion(Score.User)}}})" scale="0.45" halign="left" valign="bottom"/>
+				""";
+		declare DefendHits for Score = 0;
+		Manialink ^= """
+			<label posn="{{{TableWidth*0.35}}} 0.5" textprefix="$5bf" text="{{{DefendHits}}}" scale="0.9" halign="center" valign="center"/>""";
+		declare WonAttackRounds for Score = 0;
+		Manialink ^= """
+			<label posn="{{{TableWidth*0.38}}} 0.5" textprefix="$fb5" text="{{{WonAttackRounds}}}" scale="0.9" halign="center" valign="center"/>""";
+		Manialink ^= """
+			<label posn="{{{TableWidth*0.42}}} 0.5" text="{{{Score.Points}}}" scale="1.2" halign="center" valign="center"/>
+			</frame>""";
+
+		Rank += 1;
+		if (Rank > 16) {
+			break;
+		}
+	}
+	
+	if (G_LongestLaserName != "") {
+		Manialink ^= """
+			<label posn="{{{-TableWidth*0.45}}} -59.5" text="Longest Laser: {{{G_LongestLaserDist}}}m by {{{G_LongestLaserName}}}" scale="0.65" halign="left" valign="center"/>""";
+	}
+	
+	Manialink ^= """
+		</frame>""";
+	
+	return Manialink;
+}
+
+// Get the current rankings for xmlrpc callbacks
+Text GetRankings() {
+	declare PlayerList = "";
+	foreach (Score in Scores) {
+		PlayerList ^= Score.User.Login^":"^Score.Points^";";
+	}
+	return PlayerList;
+}
+
+// Calculates skalar of two vectors
+Real Skalar(Vec3 _Vec1, Vec3 _Vec2) {
+	return _Vec1[0]*_Vec2[0] + _Vec1[1]*_Vec2[1] + _Vec1[2]*_Vec2[2];
+}
+
+// Calculates sum of two vectors
+Vec3 Sum(Vec3 _Vec1, Vec3 _Vec2) {
+	return <_Vec1[0]+_Vec2[0], _Vec1[1]+_Vec2[1], _Vec1[2]+_Vec2[2]>;
+}
+
+// Plays headshot sound on headshot
+Void DoHeadShot(CSmModeEvent _Event) {
+	if (C_AnnounceHeadshots && _Event != Null && _Event.Shooter != Null && _Event.Victim != Null && _Event.WeaponNum == This.GetWeaponIndex(CSmMode::EWeapon::Laser)) {
+		declare UI <=> UIManager.GetUI(_Event.Shooter);
+		if (UI != Null) {
+			declare HeadPosi = <_Event.Victim.Position[0]+_Event.Victim.AimDirection[0]*0.2, _Event.Victim.Position[1]+1.5, _Event.Victim.Position[2]+_Event.Victim.AimDirection[2]*0.2>;
+			declare ShootPosi = _Event.Shooter.Position+<0.0, 1.35, 0.0>;
+			declare ShootDir = _Event.Shooter.AimDirection;
+			
+			declare a1 = Skalar(ShootDir, ShootPosi);
+			declare a2 = Skalar(ShootDir, ShootDir);
+			declare a3 = Skalar(ShootDir, -HeadPosi);
+			
+			declare gamma = (a1+a3)/(-1*a2);
+			declare stutz = Sum(ShootPosi, gamma*ShootDir);
+			
+			declare distance = MathLib::Distance(HeadPosi, stutz);
+			
+			if (distance < 0.2) {
+				UI.StatusMessage = "Headshot!";
+				declare Integer LastStatusMessage for _Event.Shooter;
+				LastStatusMessage = Now - 1000;
+				UI.ManialinkPage = """
+					// {{{Now}}}
+					<audio data="http://dl.dropbox.com/u/58886549/Horns/headshot.ogg" play="1" looping="0" hidden="1"/>""";
+			}
+		}
+	}
+}
+
+// Increases score points
+Void IncreaseScore(Ident _Id, Integer _Points) {
+	if (Players.existskey(_Id) && Players[_Id].Score != Null) {
+		Players[_Id].Score.Points += _Points;
+	} else {
+		if (Spectators.existskey(_Id) && Spectators[_Id].Score != Null) {
+			Spectators[_Id].Score.Points += _Points;
+		}
+	}
+}
+
+// Create markers layer manialink
+Text GetMarkersLayerManialink() {
+	declare Size = 8.0;
+	declare SizeFactor = 9.0/16.0;
+	
+	declare Manialink = "";
+	foreach (Pole in BlockPoles) {
+		Manialink ^= """
+			<frame id="Pole_Marker{{{Pole.Id}}}" hidden="1">
+				<quad sizen="{{{Size*SizeFactor}}} {{{Size}}}" image="file://Media/Manialinks/Shootmania/Common/spawn.dds" halign="center" valign="center"/>
+			</frame>""";
+	}
+	return Manialink;
+}

@@ -1,0 +1,20 @@
+/********************************************
+*	MapType Script for clearing metadata	*
+*	Author: steeffeen						*
+*	Contact: steeffeen@team-devota.com		*
+********************************************/
+
+#RequireContext CSmMapType
+
+/**********************************
+	MAIN
+**********************************/
+
+main() {
+	ClearMapMetadata();
+	log("Metadata successfully cleared.");
+	
+	while (True) {
+		yield;
+	}
+}

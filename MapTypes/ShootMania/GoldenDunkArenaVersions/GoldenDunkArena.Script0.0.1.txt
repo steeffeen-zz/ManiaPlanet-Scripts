@@ -1,0 +1,131 @@
+/* ------------------------ */
+//	GoldenDunk MapType		//
+//	Created by steeffeen	//
+/* ------------------------ */
+
+#RequireContext CSmMapType
+
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Anchor.Script.txt" as Anchor
+
+#Const Version	"0.0.1 (2013-01-31)"
+
+#Const Rules _("You must place exactly one Spawn #1 and one Spawn #2.\nYou must place exactly one of each Hoop, while Spawn #1 scores at Hoop #1, Spawn #2 scores at Hoop #2 and Goal #3 is the spawn of the balls.")
+
+// Check if the map is valid
+Void UpdateValidability() {
+	ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+	Anchor::UpdateAnchorCounts();
+	
+	for (I, 1, 2) {
+		if (!Anchor::HasAtLeastOneAnchor("Goal", I, TextLib::Compose(_("You must place exactly one of each Hoop #%1"), TextLib::ToText(I)))) return;
+		if (!Anchor::HasExactlyOneAnchor("Spawn", I, TextLib::Compose(_("You must place exactly one Spawn #%1"), TextLib::ToText(I)))) return;
+	}
+	if (!Anchor::HasExactlyOneAnchor("Goal", 3, _("You must place exactly one Ball Spawn (Goal #3)"))) return;
+	
+	ValidationStatus = CSmMapType::ValidationStatus::Validated;	
+}
+
+// Return the manialink for anchor edition
+Text EditAnchorManialink(Text _Tag) {
+	declare MLText = """<script><!--
+		#Include "TextLib" as TextLib
+		
+		main() {
+			declare Buttons = [
+			(Page.GetFirstChild("1") as CMlLabel),
+			(Page.GetFirstChild("2") as CMlLabel),
+			(Page.GetFirstChild("3") as CMlLabel)];
+			
+			declare Integer AnchorOrder for Page;
+			declare Text	AnchorTag for Page;
+			declare Boolean Finish for Page;
+			Finish = False;
+			
+			while(!Finish) {
+				yield;
+				
+				foreach (Button in Buttons) {
+					if (AnchorOrder == TextLib::ToInteger(Button.ControlId)) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				foreach (Event in PendingEvents) {
+					switch(Event.Type) {
+						case CMlEvent::Type::MouseClick : {
+							if (Event.ControlId != "Cancel") {
+								AnchorOrder = TextLib::ToInteger(Event.ControlId);
+							}
+							Finish = True;
+						}	
+					}
+				}
+			}
+		}			
+	--></script>
+	<frame posn="120 35">
+		<quad posn="0 0 -1" sizen="70 23" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<quad posn="0 0 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fff{{{_("Edit")^" "^_Tag}}}" />
+		<frame posn="0 -4">
+			<label id="1" posn="-10 0" scale="2" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="2" posn="0 0" scale="2" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="3" posn="10 0" scale="2" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+		</frame>
+		<label id="Cancel" text="{{{_("Cancel")}}}" posn="0 -13" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+    </frame>
+	<frame posn="120 -3">
+		<quad posn="0 0 2" sizen="74 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fff{{{_("Rules")}}}" />
+		<quad posn="0 0 -1" sizen="70 30" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<frame posn="-30 -4">
+			<label posn="0 0" sizen="60 5" autonewline="1" style="TextCardSmallScores2" text="$222{{{ Rules }}}" />
+		</frame>
+	</frame>
+	""";
+  
+	return MLText;
+}
+
+// Show the anchor edition manialink
+Void EditAnchorData(Ident _EditedAnchorDataId) {	
+	UpdateValidability();
+
+	declare Integer AnchorOrder for ManialinkPage;
+	declare Boolean Finish for ManialinkPage;
+	
+	ManialinkText = EditAnchorManialink(AnchorData[_EditedAnchorDataId].DefaultTag);
+	AnchorOrder = AnchorData[_EditedAnchorDataId].Order;
+	Finish = False;
+	while (!Finish) {
+		yield;
+	}
+	AnchorData[_EditedAnchorDataId].Order = AnchorOrder;
+	
+	UpdateValidability();
+}
+
+// Main
+main() {
+	CustomEditAnchorData = True;
+	UpdateValidability();
+	
+	while (True) {
+		yield;
+		
+		ManialinkText = "";
+		foreach (Event in PendingEvents) {
+			switch (Event.Type) {
+				case CPluginEvent::Type::MapModified: {
+					UpdateValidability();
+				}
+				case CPluginEvent::Type::EditAnchor: {
+					EditAnchorData(Event.EditedAnchorDataId);
+				}
+			}
+		}		
+	}	
+}

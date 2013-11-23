@@ -1,0 +1,293 @@
+/****************************************
+*	MapType for SpeedBallArena			*
+*	Author:		steeffeen				*
+*	Contact:	schteffens@gmail.com	*
+****************************************/
+
+#RequireContext CSmMapType
+
+#Const	Version	"1.3 (2013-04-25)"
+
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Anchor.Script.txt" as Anchor
+
+#Const Rules """You must place exactly one Spawn #1 and one Spawn #2.
+
+You must place exactly one of each Goal, while:
+- Spawn #1 captures at Goal #2,
+- Spawn #2 captures at Goal #1 and
+- Goal #3 is the ball spawn
+
+The ForwardGoal can be captured by both teams to activate the ForwardSpawn (optional)"""
+
+#Const T_ForwardSpawn	"ForwardSpawn"
+#Const T_ForwardGoal	"ForwardGoal"
+
+// Check if the map is valid
+Void UpdateValidability() {
+	declare lol for This.Mode = 0;
+	log(This.Mode);
+	ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+	Anchor::UpdateAnchorCounts();
+	
+	// Check for needed spawns and goals
+	for (I, 1, 2) {
+		if (!Anchor::HasExactlyOneAnchor("Goal", I, "You must place exactly one Goal #"^I^"!")) {
+			return;
+		}
+		if (!Anchor::HasExactlyOneAnchor("Spawn", I, "You must place exactly one Spawn #"^I^"!")) {
+			return;
+		}
+	}
+	if (!Anchor::HasExactlyOneAnchor("Goal", 3, "You must place exactly one Spawn #3 (Ball)!")) {
+		return;
+	}
+	
+	// Check for correct usage of forward spawn&goal
+	if (Anchor::HasAtLeastOneAnchor(T_ForwardSpawn, 0, "")) {
+		if (!Anchor::HasAtLeastOneAnchor(T_ForwardGoal, 0, """You must place a {{{T_ForwardGoal}}} if you have a {{{T_ForwardSpawn}}}!""")) {
+			return;
+		}
+	}
+	if (Anchor::HasAtLeastOneAnchor(T_ForwardGoal, 0, "")) {
+		if (!Anchor::HasAtLeastOneAnchor(T_ForwardSpawn, 0, """You must place a {{{T_ForwardSpawn}}} if you have a {{{T_ForwardGoal}}}!""")) {
+			return;
+		}
+	}
+	
+	// Check for unused spawns and goals
+	if (Anchor::HasAtLeastOneAnchor("Spawn", 0, "")) {
+		ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+		ValidabilityRequirementsMessage = _("You have at least one unused spawn!");
+		return;
+	}
+	if (Anchor::HasAtLeastOneAnchor("Goal", 0, "")) {
+		ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
+		ValidabilityRequirementsMessage = _("You have at least one unused goal!");
+		return;
+	}
+	
+	ValidationStatus = CSmMapType::ValidationStatus::Validated;
+	ValidabilityRequirementsMessage = "";
+}
+
+// Return the manialink for spawn anchor edition
+Text EditSpawnAnchorManialink(Ident _EditedAnchorDataId) {
+	declare MLText = 		
+	"""
+	<script><!--
+		#Include "MathLib" as MathLib
+		#Include "TextLib" as TextLib
+		
+		main() {
+			declare Buttons = [
+				(Page.GetFirstChild("1") as CMlLabel), 
+				(Page.GetFirstChild("2") as CMlLabel),
+				(Page.GetFirstChild("{{{T_ForwardSpawn}}}") as CMlLabel)];
+			
+			declare Text AnchorTag for Page;
+			declare Integer AnchorOrder for Page;
+			declare Boolean Finish for Page;
+			
+			Finish = False;	
+			while (!Finish) {
+				yield;
+				
+				foreach (Button in Buttons) {
+					if (AnchorOrder == TextLib::ToInteger(Button.ControlId) || AnchorTag == Button.ControlId) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				foreach (Event in PendingEvents) {
+					switch(Event.Type){
+						case CMlEvent::Type::MouseClick : {
+							switch (Event.ControlId) {
+								case "Cancel": {
+									
+								}
+								case "{{{T_ForwardSpawn}}}": {
+									AnchorTag = Event.ControlId;
+									AnchorOrder = 0;
+								}
+								default: {
+									AnchorTag = "Spawn";
+									AnchorOrder = TextLib::ToInteger(Event.ControlId);
+								}
+							}
+							Finish = True;
+						}	
+					}
+				}
+			}
+		}			
+	--></script>
+	<frame posn="120 40">
+		<quad posn="0 0 2" sizen="72 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffEdit Spawn"/>
+		
+		<quad posn="0 0 -1" sizen="68 28" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<frame posn="0 -4">
+			<label id="1" posn="-10 0" scale="2" halign="left" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="2" posn="10 0" scale="2" halign="right" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="{{{T_ForwardSpawn}}}" posn="0 -8" scale="1.2" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="Cancel" text="Cancel" posn="0 -15" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+		</frame>
+    </frame>
+	<frame posn="120 -3">
+		<quad posn="0 0 2" sizen="72 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffRules"/>
+		
+		<quad posn="0 0 -1" sizen="68 51" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<frame posn="-30 -4">
+			<label posn="0 0" sizen="60 5" autonewline="1" style="TextCardSmallScores2" text="$333{{{Rules}}}"/>
+		</frame>
+	</frame>
+	""";
+  
+	return MLText;
+}
+
+// Return the manialink for goal anchor edition
+Text EditGoalAnchorManialink(Ident _EditedAnchorDataId) {
+	declare MLText = 		
+	"""
+	<script><!--
+		#Include "MathLib" as MathLib
+		#Include "TextLib" as TextLib
+		
+		main() {
+			declare Buttons = [
+				(Page.GetFirstChild("1") as CMlLabel),
+				(Page.GetFirstChild("2") as CMlLabel),
+				(Page.GetFirstChild("3") as CMlLabel),
+				(Page.GetFirstChild("{{{T_ForwardGoal}}}") as CMlLabel)];
+			
+			declare Text AnchorTag for Page;
+			declare Integer AnchorOrder for Page;
+			declare Boolean Finish for Page;
+			
+			Finish = False;	
+			while (!Finish) {
+				yield;
+				
+				foreach (Button in Buttons) {
+					if (AnchorOrder == TextLib::ToInteger(Button.ControlId) || AnchorTag == Button.ControlId) {
+						Button.Value = "$090"^Button.ControlId;
+					} else {
+						Button.Value = "$fff"^Button.ControlId;
+					}
+				}
+				
+				foreach (Event in PendingEvents) {
+					switch(Event.Type){
+						case CMlEvent::Type::MouseClick : {
+							switch (Event.ControlId) {
+								case "Cancel": {
+									
+								}
+								case "{{{T_ForwardGoal}}}": {
+									AnchorTag = Event.ControlId;
+									AnchorOrder = 0;
+								}
+								default: {
+									AnchorTag = "Goal";
+									AnchorOrder = TextLib::ToInteger(Event.ControlId);
+								}
+							}
+							Finish = True;
+						}	
+					}
+				}
+			}
+		}			
+	--></script>
+	<frame posn="120 40">
+		<quad posn="0 0 2" sizen="72 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffEdit Goal"/>
+		
+		<quad posn="0 0 -1" sizen="68 28" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<frame posn="0 -4">
+			<label id="1" posn="-12 0" scale="2" halign="left" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="2" posn="0 0" scale="2" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="3" posn="12 0" scale="2" halign="right" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="{{{T_ForwardGoal}}}" posn="0 -8" scale="1.2" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
+			<label id="Cancel" text="Cancel" posn="0 -15" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+		</frame>
+    </frame>
+	<frame posn="120 -3">
+		<quad posn="0 0 2" sizen="72 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffRules"/>
+		
+		<quad posn="0 0 -1" sizen="68 51" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<frame posn="-30 -3">
+			<label posn="0 0" sizen="60 5" autonewline="1" style="TextCardSmallScores2" text="$333{{{Rules}}}"/>
+		</frame>
+	</frame>
+	""";
+  
+	return MLText;
+}
+
+// Show the anchor edition manialink
+Void EditAnchorData(Ident _EditedAnchorDataId) {
+	UpdateValidability();
+
+	declare Text AnchorTag for ManialinkPage;
+	declare Integer AnchorOrder for ManialinkPage;
+	declare Boolean Finish for ManialinkPage;
+	
+	switch (AnchorData[_EditedAnchorDataId].DefaultTag) {
+		case "Spawn": {
+			ManialinkText = EditSpawnAnchorManialink(_EditedAnchorDataId);
+		}
+		case "Goal": {
+			ManialinkText = EditGoalAnchorManialink(_EditedAnchorDataId);
+		}
+		case "Checkpoint": {
+			ManialinkText = EditGoalAnchorManialink(_EditedAnchorDataId);
+		}
+	}
+	AnchorTag = AnchorData[_EditedAnchorDataId].Tag;
+	AnchorOrder = AnchorData[_EditedAnchorDataId].Order;
+	
+	Finish = False;
+	while (!Finish) {
+		yield;
+	}
+	
+	AnchorData[_EditedAnchorDataId].Tag = AnchorTag;
+	AnchorData[_EditedAnchorDataId].Order = AnchorOrder;
+	
+	UpdateValidability();
+}
+
+// Main
+main() {
+	CustomEditAnchorData = True;
+	declare metadata Text ScriptVersion for Map;
+	ScriptVersion = Version;
+	
+	UpdateValidability();
+	
+	while (True) {
+		yield;
+		
+		ManialinkText = "";
+		foreach (Event in PendingEvents) {
+			switch (Event.Type) {
+				case CPluginEvent::Type::MapModified: {
+					UpdateValidability();
+				}
+				case CPluginEvent::Type::EditAnchor: {
+					EditAnchorData(Event.EditedAnchorDataId);
+				}
+				case CPluginEvent::Type::StartValidation: {
+					StartTestMapWithMode("SpeedBall.Script.txt");
+				}
+			}
+		}		
+	}	
+}
