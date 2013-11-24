@@ -10,7 +10,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const ScriptName				"Obstacle.Script.txt"
-#Const Version					"2.0 (2013-11-08)"
+#Const Version					"2.0 (2013-11-24)"
 #Const CompatibleMapTypes		"ObstacleArena,ObstacleTitleArena,TimeAttackArena"
 
 /*********************************************
@@ -392,7 +392,11 @@ if (!G_Solo) {
 	EndTime = StartTime + S_TimeLimit * 1000;
 }
 
-UpdateAutoTarget(Players[MathLib::Rand(0, Players.count-1)].Id);
+declare TargetId = NullId;
+if (Players.count > 0) {
+	TargetId = Players[MathLib::Rand(0, Players.count-1)].Id;
+}
+UpdateAutoTarget(TargetId);
 ***
 
 ***OnNewPlayer***
