@@ -1,7 +1,7 @@
 /****************************************
 *	MapType Base Script					*
-*	Author: steeffeen					*
-*	Contact: steeffeen@team-devota.com	*
+*	Author:		steeffeen				*
+*	Contact:	mail@steeffeen.com		*
 ****************************************/
 
 #RequireContext CSmMapType

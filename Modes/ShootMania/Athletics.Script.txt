@@ -1,8 +1,8 @@
-/************************************
-*	Athletics Game Mode				*
-*	Author: steeffeen				*
-*	Contact: schteffens@gmail.com	*
-************************************/
+/****************************************
+*	Athletics Game Mode					*
+*	Author: steeffeen					*
+*	Contact: steeffeen@team-devota.com	*
+****************************************/
 
 /* TODO:
 - spawn screens in disciplines show current ranking OF THE discipline
@@ -23,21 +23,19 @@
 #Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
 
 #Const	CompatibleMapTypes	"AthleticsArena"
-#Const	Version 			"0.6.5 (2013-04-20)"
+#Const	Version 			"0.6.7 (2013-12-02)"
 
 // SETTINGS
-#Setting	S_TimeLimit		16	as _("Time limit per map (minutes)")
+#Setting	S_TimeLimit			16		as _("Time Limit per Map (Minutes)")
+#Setting	S_ManageAFKPlayers	True	as _("Force AFK-Players into Spectator")
 
 // CONSTANTS
 #Const	C_NeutralEmblemUrl		""
 // Gameplay contants
 #Const	C_PointsPerDiscipline	100.0			// Points granted to the winner of a certain discipline
-#Const	C_ManageAFKPlayers		True			// Force afk players into spec
-// UI contants
-#Const	C_UITickRate			250				// Time between ui updates
 
 // TEXTS
-#Const	Description				_("Compete against other international $<$08fAthletes$> in different disciplines!")
+#Const	Description				_("Compete against other international $<$08fAthletes$> in different Disciplines!")
 #Const	C_LobbyName				"Lobby"			// Name of lobby
 
 // Discipline types
@@ -75,6 +73,7 @@ UIManager.UIAll.AltMenuNoCustomScores = True;
 SM::SetupDefaultVisibility();
 // UI Layers
 Chrono::Load();
+Tabs::Load();
 // Utility layer
 declare UtilityLayer <=> UIManager.UILayerCreate();
 UtilityLayer.ManialinkPage = GetUtilityLayerManialink();
@@ -97,7 +96,7 @@ SpawnScreen::CreateScores();
 
 ***StartMap***
 ***
-Message::SendBigMessage("New Match!", 3000, 3, CUIConfig::EUISound::StartMatch, 0);
+Message::SendBigMessage(_("New Match!"), 3000, 3, CUIConfig::EUISound::StartMatch, 0);
 
 // Initialize map
 InitMap();
@@ -114,7 +113,6 @@ UIManager.UIAll.Hud3dMarkers = GetHud3dMarkers();
 MarkersLayer.ManialinkPage = GetMarkersLayerManialink();
 
 // Tabs
-Tabs::Load();
 declare CUILayer TabsLayer <=> CreateTabPaneLayer(GetDisciplinesImages(G_Disciplines), 25, 15, True);
 TabsLayer.Type = CUILayer::EUILayerType::AltMenu;
 UIManager.UIAll.UILayers.add(TabsLayer);
@@ -180,7 +178,7 @@ if (UI != Null) {
 Message::Loop();
 
 // Manage afk players
-if (C_ManageAFKPlayers) {
+if (S_ManageAFKPlayers) {
 	if (G_LastAFKCheck + 30000 < Now) {
 		G_LastAFKCheck = Now;
 		AFK::ManageAFKPlayers();
@@ -381,7 +379,7 @@ foreach (Event in PendingEvents) {
 }
 
 // UI updates
-if (G_LastUIUpdate + C_UITickRate < Now) {
+if (G_LastUIUpdate + 250 < Now) {
 	G_LastUIUpdate = Now;
 	
 	// Update disciplines scores layers
@@ -453,9 +451,9 @@ foreach (Score in Scores) {
 		Best = Score.Points;
 	}
 }
-declare Message = "Match Draw";
+declare Message = _("Match Draw");
 if (Winner != Null) {
-	Message = """$<{{{Winner.Name}}}$> wins the map!""";
+	Message = TextLib::Compose(_("%1 wins the Map!"), "$<"^Winner.Name^"$>");
 }
 Message::SendBigMessage(Message, 3000, 3, CUIConfig::EUISound::EndMatch, 0);
 UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
@@ -464,6 +462,7 @@ UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
 MB_Sleep(4000);
 
 ScoresTable::EndMatch();
+ScoresTable::Unload();
 foreach (Layer in G_DisciplinesScoresLayers) {
 	UIManager.UILayerDestroy(Layer);
 }
@@ -474,7 +473,6 @@ UIManager.UILayerDestroy(TabsLayer);
 ***
 // UI cleanup
 Chrono::Unload();
-ScoresTable::Unload();
 SpawnScreen::DestroyRules();
 SpawnScreen::DestroyScores();
 SpawnScreen::DestroyMapInfo();
@@ -938,6 +936,7 @@ Text GetMarkersLayerManialink() {
 		
 		// Show/hide frame and its subcontrols
 		Void ShowFrame(CMlFrame _Frame, Boolean _Show) {
+			if (_Frame == Null) return;
 			_Frame.Visible = _Show;
 			foreach (SubControl in _Frame.Controls) {
 				SubControl.Visible = _Show;
@@ -967,14 +966,18 @@ Text GetMarkersLayerManialink() {
 	}
 	Manialink ^= """];
 			G_GoalFrames	=	[""";
-	Index = 0;
-	foreach (GoalId => Discipline in G_DisciplineGoals) {
-		if (Index > 0) {
-			Manialink ^= ",";
+	if (G_DisciplineGoals.count > 0) {
+		Index = 0;
+		foreach (GoalId => Discipline in G_DisciplineGoals) {
+			if (Index > 0) {
+				Manialink ^= ",";
+			}
+			Manialink ^= """
+				"{{{Discipline^Index}}}"	=>	(Page.GetFirstChild("{{{BlockPoles[GoalId].Tag^Index}}}") as CMlFrame)""";
+			Index += 1;
 		}
-		Manialink ^= """
-			"{{{Discipline^Index}}}"	=>	(Page.GetFirstChild("{{{BlockPoles[GoalId].Tag^Index}}}") as CMlFrame)""";
-		Index += 1;
+	} else {
+		Manialink ^= """ "" => Null """;
 	}
 	Manialink ^= """];
 			declare netread Net_Discipline for UI = "";

@@ -10,7 +10,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const ScriptName				"Obstacle.Script.txt"
-#Const Version					"2.0 (2013-11-24)"
+#Const Version					"2.0 (2013-11-26)"
 #Const CompatibleMapTypes		"ObstacleArena,ObstacleTitleArena,TimeAttackArena"
 
 /*********************************************
@@ -53,10 +53,10 @@
 #Const	C_UseWeapons				True						// Players can use weapons on theirselves
 #Const	C_DefaultNeutralEmblemUrl	"http://www.team-devota.com/steeffeen/images/emblem_obstacle.dds"	// Neutral emblem
 
-#Const	C_ItemDuration		5000
 #Const	T_ItemOffzone		"Obstacle\\OffzoneShield.Item.gbx"
+#Const	T_ItemAmmo			"Obstacle\\Ammo.Item.gbx"
 
-#Const	Description		_("Finish difficult Obstacle Courses as fast as possible.\nImprove your movement skills and become the Champion.")
+#Const	Description		_("Finish difficult Obstacle Courses as fast as possible.\nImprove Your Movement Skills and become the Champion.")
 
 /*********************************************
 	GLOBALES
@@ -64,12 +64,9 @@
 
 declare Boolean 	G_Solo;						// Whether solo obstacle is running
 declare Text		G_ModeName;					// Name of the running game mode
-declare Integer		G_OldTimeLimit;				// Time limit on the map
 declare Ident		G_StartSpawnId;				// Id of the start spawn on the current map
 declare Integer		G_CheckpointsTotal;			// Number of checkpoints on the current map
-declare Integer		G_LastAFKCheck;				// Time of last afk check
-declare Integer		G_LastNextMapVotingCheck;	// Time of last afk check
-declare Integer		G_LastUIUpdate;				// Time of last ui update
+declare Integer		G_LastUIUpdate;				// Last UI Update
 declare Text		G_DefaultMarkers;			// Set of default markers
 declare Text		G_DefaultMarkerFrames;		// Set of default marker frames
 declare	Ident[Text]	G_ItemIdents;				// Idents of loaded items
@@ -173,8 +170,9 @@ Mode::Ladder_OpenMatch_All();
 ***CheckTimes***
 ***
 // Check setting update
-if (G_OldTimeLimit != S_TimeLimit) {
-	G_OldTimeLimit = S_TimeLimit;
+declare Last_TimeLimit for This = S_TimeLimit;
+if (Last_TimeLimit != S_TimeLimit) {
+	Last_TimeLimit = S_TimeLimit;
 	
 	// Update EndTime
 	declare NewEndTime = StartTime + S_TimeLimit * 1000;
@@ -285,6 +283,7 @@ if (UI != Null) {
 ***
 G_Solo = False;
 G_ModeName = "Obstacle";
+G_LastUIUpdate = 0;
 ***
 
 ***StartServer***
@@ -292,6 +291,7 @@ G_ModeName = "Obstacle";
 // Load items
 ItemList_Begin();
 G_ItemIdents[T_ItemOffzone] = ItemList_Add(T_ItemOffzone);
+G_ItemIdents[T_ItemAmmo] = ItemList_Add(T_ItemAmmo);
 ItemList_End();
 
 Color::Load();
@@ -304,12 +304,6 @@ UsePvPCollisions = False;
 UsePvPWeapons = S_PvPWeapons;
 UseClans = False;
 if (MB_NeutralEmblemUrl == "") MB_NeutralEmblemUrl = C_DefaultNeutralEmblemUrl;
-
-// Init variables
-G_LastUIUpdate = 0;
-G_OldTimeLimit = 0;
-G_LastNextMapVotingCheck = 0;
-G_LastAFKCheck = 0;
 
 // UI
 UIManager.UIAll.UISequence_CanSkipIntroMT = True;
@@ -371,9 +365,24 @@ foreach (Index => Anchor in ObjectAnchors) {
 	switch (Anchor.ItemName) {
 		case T_ItemOffzone: {
 			declare Object = ObjectCreate(G_ItemIdents[T_ItemOffzone]);
-			declare Text ItemName for Object;
-			ItemName = T_ItemOffzone;
 			Object.SetAnchor(Anchor);
+			declare metadata Meta_BuffDuration for Anchor = 5.;
+			declare Text ItemName for Object;
+			declare Real Duration for Object;
+			ItemName = T_ItemOffzone;
+			Duration = Meta_BuffDuration;
+		}
+		case T_ItemAmmo: {
+			declare Object = ObjectCreate(G_ItemIdents[T_ItemAmmo]);
+			Object.SetAnchor(Anchor);
+			declare metadata Meta_GrantAmmoDuration for Anchor = 0.;
+			declare metadata Meta_GrantAmmoAmount for Anchor = 1.;
+			declare Text ItemName for Object;
+			declare Real Duration for Object;
+			declare Real Amount for Object;
+			ItemName = T_ItemAmmo;
+			Duration = Meta_GrantAmmoDuration;
+			Amount = Meta_GrantAmmoAmount;
 		}
 	}
 	if (Objects.count > 100) break;
@@ -442,8 +451,8 @@ MiniMap::Loop();
 
 ***PlayLoop***
 ***
----CheckTimes---
 ManageAfkPlayers();
+{---CheckTimes---}
 CheckMiniMapEvents();
 CheckScriptSettings();
 
@@ -455,7 +464,7 @@ foreach (Event in PendingEvents) {
 				if (Event.Victim.IsInOffZone) {
 					// Offzone item active?
 					declare netwrite ItemBuffTimes for Event.Victim = Integer[Text];
-					if (ItemBuffTimes.existskey(T_ItemOffzone) && ItemBuffTimes[T_ItemOffzone] + C_ItemDuration >= Now) {
+					if (ItemBuffTimes.existskey(T_ItemOffzone) && ItemBuffTimes[T_ItemOffzone] >= Now) {
 						// Item effect lets player walk through offzone
 						Discard(Event);
 						continue;
@@ -488,8 +497,27 @@ foreach (Event in PendingEvents) {
 					case T_ItemOffzone: {
 						// Offzone pickup
 						declare netwrite ItemBuffTimes for Event.Player = Integer[Text];
-						if (!ItemBuffTimes.existskey(T_ItemOffzone) || ItemBuffTimes[T_ItemOffzone] + C_ItemDuration < Now) {
-							ItemBuffTimes[T_ItemOffzone] = Now;
+						declare Duration for Event.Object = 5.;
+						if (!ItemBuffTimes.existskey(T_ItemOffzone) || ItemBuffTimes[T_ItemOffzone] < Now) {
+							ItemBuffTimes[T_ItemOffzone] = Now + MathLib::NearestInteger(Duration * 1000.);
+							PickedUp = True;
+						}
+					}
+					case T_ItemAmmo: {
+						// Ammo item
+						declare netwrite ItemBuffTimes for Event.Player = Integer[Text];
+						if (!ItemBuffTimes.existskey(T_ItemAmmo)) {
+							declare Duration for Event.Object = 0.;
+							declare Amount for Event.Object = 1.;
+							ItemBuffTimes[T_ItemAmmo] = Now + MathLib::NearestInteger(Duration * 1000.);
+							declare Real AmmoItemBuffDuration for Event.Player;
+							declare Real AmmoItemBuffAmount for Event.Player;
+							AmmoItemBuffDuration = Duration;
+							AmmoItemBuffAmount = Amount;
+							if (Duration <= 0.) {
+								// Instant grant
+								AddPlayerAmmo(Event.Player, Tools::GetCurrentWeapon(Event.Player), Amount);
+							}
 							PickedUp = True;
 						}
 					}
@@ -516,53 +544,66 @@ foreach (Player in Players) {
 		case CSmPlayer::ESpawnStatus::Spawned: {
 			if (Player.RequestsSpectate) {
 				UnspawnPlayer(Player);
-			} else {
-				if (Player.BlockPole != Null) {
-					declare CheckpointsTimeLast for Player.Score = Integer[Ident];
-					switch (Player.BlockPole.Tag) {
-						case "Goal": {
-							if (CheckpointsTimeLast.count >= G_CheckpointsTotal) {
-								// Run finish
-								ActivateFinish(Player, Player.BlockPole.Id);
-							} else {
-								// Checkpoint missed
-								declare LastStatusMessage for Player = 0;
-								if (LastStatusMessage + 2500 < Now) {
-									LastStatusMessage = Now;
-									declare CheckpointsDiff = G_CheckpointsTotal - CheckpointsTimeLast.count;
-									declare Message = "";
-									if (CheckpointsDiff > 1) {
-										Message = TextLib::Compose(_("%1You missed %2 Checkpoints!"), "$f00", TextLib::ToText(CheckpointsDiff));
-									} else {
-										Message = TextLib::Compose("$f00%1", _("You missed a Checkpoint!"));
-									}
-									Message::SendBigMessage(Player, Message, 2000, 2, CUIConfig::EUISound::Warning, 1);
-									
-									// Mark missing checkpoints
-									UpdatePoleIds(Player);
-								}
-							}
-						}
-						case "No-Function": {
-							// Inactive pole
-							declare LastStatusMessage for Player = 0;
-							if (LastStatusMessage + 2500 < Now) {
-								LastStatusMessage = Now;
-								Message::SendStatusMessage(Player, _("Inactive Pole!"), 2000, 0);
-							}
-						}
-						case "Portal": {
-							// Portal
-							UsePortal(Player, Player.BlockPole.Id);
-						}
-						default: {
-							// Checkpoint?
-							if (IsCheckpoint(Player.BlockPole) && !CheckpointsTimeLast.existskey(Player.BlockPole.Id)) {
-								// Checkpoint!
-								ActivateCheckpoint(Player, Player.BlockPole.Id);
-							}
-						}
+				continue;
+			}
+			
+			// Manage item effects
+			declare netwrite ItemBuffTimes for Player = Integer[Text];
+			foreach (ItemName => BuffTime in ItemBuffTimes) {
+				if (BuffTime < Now) continue;
+				switch (ItemName) {
+					case T_ItemAmmo: {
+						declare AmmoItemBuffDuration for Player = 0.;
+						if (AmmoItemBuffDuration <= 0.) continue;
+						declare AmmoItemBuffAmount for Player = 1.;
+						declare TickAmount = AmmoItemBuffAmount / (AmmoItemBuffDuration * 1000. / Period);
+						AddPlayerAmmo(Player, Tools::GetCurrentWeapon(Player), TickAmount);
 					}
+				}
+			}
+			
+			// Manage checkpoints + goals
+			if (Player.BlockPole == Null || Player.Score == Null) continue;
+			declare CheckpointsTimeLast for Player.Score = Integer[Ident];
+			switch (Player.BlockPole.Tag) {
+				case "Goal": {
+					if (CheckpointsTimeLast.count >= G_CheckpointsTotal) {
+						// Run finish
+						ActivateFinish(Player, Player.BlockPole.Id);
+						continue;
+					}
+					// Checkpoint missed
+					declare LastStatusMessage for Player = 0;
+					if (LastStatusMessage + 2500 >= Now) continue;
+					LastStatusMessage = Now;
+					declare CheckpointsDiff = G_CheckpointsTotal - CheckpointsTimeLast.count;
+					declare Message = "";
+					if (CheckpointsDiff > 1) {
+						Message = TextLib::Compose(_("%1You missed %2 Checkpoints!"), "$f00", TextLib::ToText(CheckpointsDiff));
+					} else {
+						Message = TextLib::Compose("$f00%1", _("You missed a Checkpoint!"));
+					}
+					Message::SendBigMessage(Player, Message, 2000, 2, CUIConfig::EUISound::Warning, 1);
+					
+					// Mark missing checkpoints
+					UpdatePoleIds(Player);
+				}
+				case "No-Function": {
+					// Inactive pole
+					declare LastStatusMessage for Player = 0;
+					if (LastStatusMessage + 2500 >= Now) continue;
+					LastStatusMessage = Now;
+					Message::SendStatusMessage(Player, _("Inactive Pole!"), 2000, 0);
+				}
+				case "Portal": {
+					// Portal
+					UsePortal(Player, Player.BlockPole.Id);
+				}
+				default: {
+					// Checkpoint?
+					if (!IsCheckpoint(Player.BlockPole) || CheckpointsTimeLast.existskey(Player.BlockPole.Id)) continue;
+					// New Checkpoint!
+					ActivateCheckpoint(Player, Player.BlockPole.Id);
 				}
 			}
 		}
@@ -776,10 +817,10 @@ Boolean CanFreeSpec(CSmPlayer _Player) {
 	if (Spectators.existskey(_Player.Id)) {
 		return True;
 	}
-	if (!S_DisablePlayerSpec && Players.existskey(_Player.Id)) {
-		return True;
+	if (S_DisablePlayerSpec && Players.existskey(_Player.Id)) {
+		return False;
 	}
-	return False;
+	return True;
 }
 
 // Check script settings
@@ -805,7 +846,7 @@ Boolean IsCheckpoint(CSmBlockPole _Pole) {
 
 // Send xmlrpc callback
 Void SendXmlRpcCallback(Text _CallbackName, CSmPlayer _Player, Integer _RunTime, Ident _CheckpointId) {
-	if (_Player == Null || !_Player.IsFakePlayer || _Player.Score != Null || _CallbackName != "" || _RunTime > 0) return;
+	if (_Player == Null || _Player.IsFakePlayer || _Player.Score == Null || _CallbackName == "" || _RunTime <= 0) return;
 	declare RespawnCount for _Player = 0;
 	declare JSON = "";
 	
@@ -1727,7 +1768,6 @@ Text CreateLayerUtilities() {
 									OwnCustomRestartKey = Event.KeyName;
 									continue;
 								}
-								log(Event.KeyName);
 							}
 							switch (Event.KeyName) {
 								case OwnCustomRestartKey: {
@@ -1893,7 +1933,6 @@ Void UpdateLayerUtilities() {
 		if (Last_SpecTargetChanged != Net_SpecTargetChanged) {
 			declare Last_SpecTargetLogin for UI = "";
 			declare netread Net_SpecTargetLogin for UI = "";
-			log(Now^Net_SpecTargetLogin^Last_SpecTargetLogin);
 			if (CanFreeSpec(Player) && Net_SpecTargetLogin != Player.Login && Net_SpecTargetLogin != "") {
 				if (!UI.ForceSpectator || Last_SpecTargetLogin != Net_SpecTargetLogin) {
 					ForceSpec = True;
@@ -2029,7 +2068,6 @@ Void ActivateCheckpoint(CSmPlayer _Player, Ident _CheckpointId) {
 	
 	UpdateCustom3(_Player);
 	UpdateFooterScore(_Player);
-	
 	UpdateRanking();
 	
 	// Special checkpoints
@@ -2172,8 +2210,9 @@ Void ActivateFinish(CSmPlayer _Player, Ident _GoalId) {
 
 // Manage afk players
 Void ManageAfkPlayers() {
-	if (!S_ManageAfkPlayers || G_LastAFKCheck + 30000 > Now) return;
-	G_LastAFKCheck = Now;
+	declare Last_AFKCheck for This = -1;
+	if (!S_ManageAfkPlayers || Last_AFKCheck + 30000 > Now) return;
+	Last_AFKCheck = Now;
 	
 	foreach (Player in Players) {
 		if (Player.Score == Null) continue;
@@ -2203,13 +2242,12 @@ Text GetRankings() {
 
 // Create manialink for items layer
 Text CreateLayerItems() {
-	declare ItemCount = 1;
+	declare ItemCount = G_ItemIdents.count;
 	declare Manialink = """<script><!--
 		#Include "MathLib" as MathLib
 		#Include "TextLib" as TextLib
 		
 		#Const	C_ItemCount		{{{ItemCount}}}
-		#Const	C_ItemDuration	{{{C_ItemDuration}}}
 		
 		main() {
 			wait(InputPlayer != Null && Page != Null && LocalUser != Null);
@@ -2218,6 +2256,8 @@ Text CreateLayerItems() {
 			
 			declare Last_UIUpdate = 0;
 			declare Last_LabelInfoShown = 0;
+			declare Last_BuffEnds = Integer[Text];
+			declare Last_BuffDurations = Integer[Text];
 			
 			while (True) {
 				yield;
@@ -2234,7 +2274,7 @@ Text CreateLayerItems() {
 					foreach (ItemName => BuffTime in ItemBuffTimes) {
 						declare Frame <=> (Page.GetFirstChild("Frame_ItemGauge"^Index) as CMlFrame);
 						if (Frame == Null) continue;
-						if (BuffTime + C_ItemDuration < ArenaNow) continue;
+						if (BuffTime < ArenaNow) continue;
 						
 						declare Gauge_Item <=> (Frame.GetFirstChild("Gauge_Item") as CMlGauge);
 						declare Label_Time <=> (Frame.GetFirstChild("Label_Time") as CMlLabel);
@@ -2252,16 +2292,26 @@ Text CreateLayerItems() {
 							Frame.PosnY = Source_Y;
 						}
 						
+						if (!Last_BuffEnds.existskey(ItemName) || Last_BuffEnds[ItemName] != BuffTime || !Last_BuffDurations.existskey(ItemName)) {
+							Last_BuffEnds[ItemName] = BuffTime;
+							Last_BuffDurations[ItemName] = BuffTime - ArenaNow;
+						}
+						
+						declare TimeDiff = BuffTime - ArenaNow;
+						
+						declare Ratio = TimeDiff / MathLib::ToReal(Last_BuffDurations[ItemName]);
+						if (Ratio < 0.) {
+							Ratio = 0.;
+						} else if (Ratio > 1.) {
+							Ratio = 1.;
+						}
+						Gauge_Item.Ratio = Ratio;
+						
+						declare TimeDiffText = MathLib::NearestInteger(TimeDiff / 100.) / 10.;
+						Label_Time.Value = TimeDiffText^"s";
+						
 						declare ItemParts = TextLib::Split("\\", ItemName);
 						ItemParts = TextLib::Split(".", ItemParts[ItemParts.count-1]);
-						declare TimeDiff = C_ItemDuration - ArenaNow + BuffTime;
-						declare Ratio = TimeDiff / MathLib::ToReal(C_ItemDuration);
-						if (Ratio < 0.) Ratio = 0.;
-						else if (Ratio > 1.) Ratio = 1.;
-						declare TimeDiffText = MathLib::NearestInteger(TimeDiff / 100.) / 10.;
-						
-						Gauge_Item.Ratio = Ratio;
-						Label_Time.Value = TimeDiffText^"s";
 						Label_Item.Value = ItemParts[0];
 						
 						if (LocalPlayer != InputPlayer || Label_Info.Visible) continue;
@@ -2280,7 +2330,7 @@ Text CreateLayerItems() {
 					if (Frame == Null) continue;
 					Frame.Visible = False;
 				}
-				Label_Info.Visible = (Last_LabelInfoShown + C_ItemDuration > Now);
+				Label_Info.Visible = (Last_LabelInfoShown + 15000 > Now);
 			}
 		}
 		--></script>
@@ -2291,7 +2341,7 @@ Text CreateLayerItems() {
 			<label id="Label_Item" posn="-36.5 -0.5" style="TextTitle1" textsize="1" translate="1" halign="left" valign="center2"/>
 		</framemodel>""";
 	for (Index, 1, ItemCount) {
-		Manialink ^= """<frameinstance id="Frame_ItemGauge{{{Index}}}" posn="0 {{{-65 + Index * 9.}}} -15" modelid="Model_ItemGauge" hidden="1"/>""";
+		Manialink ^= """<frameinstance id="Frame_ItemGauge{{{Index}}}" posn="0 {{{-65 + Index * 8.3}}} -15" modelid="Model_ItemGauge" hidden="1"/>""";
 	}
 	return Manialink;
 }

@@ -142,9 +142,21 @@ Text GetColorizedTeamName(Integer _Clan) {
 // Get weapon from index
 CSmMode::EWeapon GetWeapon(Integer _Index) {
 	switch (_Index) {
-		case 1: return CSmMode::EWeapon::Laser;
-		case 2: return CSmMode::EWeapon::Nucleus;
-		case 3: return CSmMode::EWeapon::Arrow;
+		case 0: {
+			return CSmMode::EWeapon::Laser;
+		}
+		case 2: {
+			return CSmMode::EWeapon::Nucleus;
+		}
+		case 4: {
+			return CSmMode::EWeapon::Arrow;
+		}
 	}
 	return CSmMode::EWeapon::Rocket;
+}
+
+// Get current weapon of the player
+CSmMode::EWeapon GetCurrentWeapon(CSmPlayer _Player) {
+	if (_Player == Null) return CSmMode::EWeapon::Rocket;
+	return GetWeapon(_Player.CurWeapon-1);
 }
