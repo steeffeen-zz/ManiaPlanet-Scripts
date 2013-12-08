@@ -30,13 +30,16 @@
 #Setting	S_DefusingTimeFactor	1.5		as _("Factor for Time to defuse the Bomb")
 #Setting	S_BombExplosionTime		45.		as _("Time until an activated Bomb explodes (Seconds)")
 
+#Setting	S_EnableRoundRespawn	False	as _("Enable Respawning during Rounds")
+#Setting	S_FriendlyFire			False	as _("Friendly-Fire (Team Damage)")
+
 
 /****************************************
 	CONSTANTS
 ****************************************/
 
+#Const	Version					"0.06 (2013-12-08)"
 #Const	ScriptName				"Defusing.Script.txt"
-#Const	Version					"0.05 (20.11.2013)"
 #Const	CompatibleMapTypes		"DefusingArena"
 
 
@@ -82,19 +85,23 @@ PrepareMap();
 // Begin match
 ClanScores[1] = 0;
 ClanScores[2] = 0;
-UpdateClanScoresSummary();
 Score::MatchBegin();
 Victory::MatchBegin();
+UpdateClanScoresSummary();
 ***
 
 ***StartRound***
 ***
 // Prepare next round
+SM::UnspawnAllPlayers();
 PrepareRound();
 
 // Prepare scores
 Score::RoundBegin();
 Victory::RoundBegin();
+UpdateClanScoresSummary();
+
+MB_Sleep(1000);
 
 // Set the begin of the round
 Mode::Synchro_DoBarrier();
@@ -109,6 +116,11 @@ UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
 foreach (Player in Players) {
 	switch (Player.SpawnStatus) {
 		case CSmPlayer::ESpawnStatus::NotSpawned: {
+		
+			if (!S_EnableRoundRespawn && Now > StartTime) {
+				// Round has already started
+				continue;
+			}
 			
 			if (Player.RequestsSpectate) {
 				// The player wants to spectate - Do nothing
@@ -146,16 +158,20 @@ foreach (Event in PendingEvents) {
 				continue;
 			}
 			
-			if (Event.Shooter.CurrentClan == Event.Victim.CurrentClan) {
-				// Team hit
+			if (!S_FriendlyFire && Event.Shooter.CurrentClan == Event.Victim.CurrentClan) {
+				// Invalid Team Hit
 				Discard(Event);
 				continue;
 			}
 			
-			// Opponent hit
+			// Valid hit
 			
 			// Calculate points
 			declare Points = Event.Damage / 100;
+			if (Event.Shooter.CurrentClan == Event.Victim.CurrentClan) {
+				// Team Hit
+				Points *= -1;
+			}
 			
 			// Grant points for the shooter
 			Score::AddPoints(Event.Shooter, Points);
@@ -168,6 +184,10 @@ foreach (Event in PendingEvents) {
 		}
 		case CSmModeEvent::EType::OnArmorEmpty: {
 			// Player has been eliminated
+			PassOn(Event);
+		}
+		case CSmModeEvent::EType::OnPlayerRequestRespawn: {
+			// Player wants to be despawned
 			PassOn(Event);
 		}
 		case CSmModeEvent::EType::OnCapture: {
@@ -265,6 +285,17 @@ if (Now >= EndTime) {
 		// Attackers didn't set bomb
 		Victory::SetRoundWinnerIfNoWinner(3-G_AttackingClan);
 	}
+} else {
+	foreach (Clan => Team in Teams) {
+		if (ClansNbPlayersAlive[Clan+1] > 0) continue;
+		// Team has been eliminated
+		if (Clan+1 == G_AttackingClan && BlockPoles.existskey(G_BombCarrierId)) {
+			// Bomb is already planted, Defense still has to defuse
+			continue;
+		}
+		Victory::SetRoundWinnerIfNoWinner(2-Clan);
+		break;
+	}
 }
 if (Victory::NoRoundWinner()) continue;
 // Round is won
@@ -290,6 +321,8 @@ if (!Victory::IsRoundDraw()) {
 	UpdateClanScoresSummary();
 }
 Victory::RoundEnd();
+
+MB_Sleep(1000);
 
 // Match end conditions
 Victory::SetMatchWinnerFromScore(S_RoundsToWin, S_RoundGapToWin, S_RoundsLimit);
