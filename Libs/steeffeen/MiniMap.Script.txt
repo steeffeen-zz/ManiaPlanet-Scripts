@@ -115,7 +115,7 @@ Void Build() {
 		}
 		
 		Void PrepareMap() {
-			id (Map != Null && Map.MapInfo != Null) {
+			if (Map != Null && Map.MapInfo != Null) {
 				// Set header text
 				declare Label_Header <=> (Page.GetFirstChild("Label_Header") as CMlLabel);
 				Label_Header.Value = TextLib::Compose("$<%1$> %2 $<%3$>", Map.MapInfo.Name, _("|Made by|by"), Map.MapInfo.AuthorLogin);

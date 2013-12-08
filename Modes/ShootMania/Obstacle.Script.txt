@@ -107,7 +107,7 @@ To validate a Race you must touch the Finish after going through all the {{{Open
 
 if (!G_Solo) {
 	ModeRules ^=
-"""You can start over and improve your Time as often as you want during {{{OpenSettingText^(S_TimeLimit / 60.)^CloseText}}} Minutes.
+"""You can start over and improve your Time as often as you want during {{{OpenSettingText^S_TimeLimit^CloseText}}} Minutes.
 The Player with the best Time wins the Map.
 """;
 }
