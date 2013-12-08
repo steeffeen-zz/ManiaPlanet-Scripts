@@ -1015,7 +1015,7 @@ Void Build(Boolean _ForceUseClans, Boolean _UseClans) {
 	// For solo mode
 	else {
 		HeaderML = """
-<label posn="{{{-(G_LibST_TableSizeX/2.)+3.}}} -2.5 {{{ZText}}}" sizen="{{{G_LibST_TableSizeX - 20.}}} {{{G_LibST_HeaderSizeY}}}" textsize="6" textemboss="1" text="{{{_("Ranking")}}}" id="Label_Header" />
+<label posn="{{{-(G_LibST_TableSizeX/2.)+3.}}} -2.5 {{{ZText}}}" sizen="{{{G_LibST_TableSizeX - 20.}}} {{{G_LibST_HeaderSizeY}}}" textsize="6" textemboss="1" text="{{{"Obstacle"}}}" id="Label_Header" />
 """;
 	}
 	

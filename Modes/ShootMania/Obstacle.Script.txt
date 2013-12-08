@@ -10,7 +10,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const ScriptName				"Obstacle.Script.txt"
-#Const Version					"2.0 (2013-11-26)"
+#Const Version					"2.0 (2013-12-05)"
 #Const CompatibleMapTypes		"ObstacleArena,ObstacleTitleArena,TimeAttackArena"
 
 /*********************************************
@@ -38,7 +38,7 @@
 	SETTINGS
 *********************************************/
 
-#Setting	S_TimeLimit				3000	as _("Time Limit (Seconds)")
+#Setting	S_TimeLimit				50.		as _("Time Limit (Minutes)")
 #Setting	S_ManageAfkPlayers		True	as _("Force Afk-Players into Spec")
 #Setting	S_PvPWeapons			False	as _("Enable PvP Weapons")
 #Setting	S_FullAmmoSpawn			True	as _("Spawning with full Ammunition")
@@ -145,7 +145,8 @@ ScoresTable::SetDefaultCustom1("");
 ScoresTable::SetDefaultCustom2("-");
 ScoresTable::SetDefaultCustom3("-");
 ScoresTable::SetDefaultFooterScore("");
-ScoresTable::SetDefaultFooterStats(TextLib::Compose("%1: %2", _("Time Limit"), TextLib::TimeToText(S_TimeLimit * 1000, False)));
+ScoresTable::SetDefaultFooterStats(TextLib::Compose("%1: %2", _("Time Limit"),
+	TextLib::TimeToText(MathLib::NearestInteger(S_TimeLimit * 60. * 1000.), False)));
 ScoresTable::Build();
 ScoresTable::GetLayerScoresTable().Type = CUILayer::EUILayerType::Normal;
 
@@ -175,12 +176,12 @@ if (Last_TimeLimit != S_TimeLimit) {
 	Last_TimeLimit = S_TimeLimit;
 	
 	// Update EndTime
-	declare NewEndTime = StartTime + S_TimeLimit * 1000;
+	declare NewEndTime = StartTime + S_TimeLimit * 60. * 1000.;
 	if (EndTime != NewEndTime) {
-		if (NewEndTime < Now + 15000) {
-			NewEndTime = Now + 15000;
+		if (NewEndTime < Now + 15000.) {
+			NewEndTime = Now + 15000.;
 		}
-		EndTime = NewEndTime;
+		EndTime = MathLib::NearestInteger(NewEndTime);
 	}
 	
 	// Update rules
@@ -197,7 +198,8 @@ if (Now >= EndTime) {
 
 ***UpdateFooterStats***
 ***
-ScoresTable::SetFooterStats(_Player, TextLib::Compose("%1: %2", _("Time Limit"), TextLib::TimeToText(S_TimeLimit * 1000, False)));
+ScoresTable::SetFooterStats(_Player, TextLib::Compose("%1: %2", _("Time Limit"),
+	TextLib::TimeToText(MathLib::NearestInteger(S_TimeLimit * 60. * 1000.), False)));
 ***
 
 ***PlayerFinish***
@@ -257,7 +259,7 @@ Net_StartTime = 0;
 UpdateCustom3(_Player);
 UpdateFooterScore(_Player);
 UpdateLayerInfo(_Player, RunLast, RunBest);
-RestartPlayer(_Player, True);
+RestartPlayer(_Player, True, False);
 
 declare UI <=> UIManager.GetUI(_Player);
 if (UI != Null) {
@@ -398,7 +400,7 @@ MiniMap::Build();
 
 StartTime = Now + 3500;
 if (!G_Solo) {
-	EndTime = StartTime + S_TimeLimit * 1000;
+	EndTime = MathLib::NearestInteger(StartTime + S_TimeLimit * 60. * 1000.);
 }
 
 declare TargetId = NullId;
@@ -470,7 +472,7 @@ foreach (Event in PendingEvents) {
 						continue;
 					}
 				}
-				RestartPlayer(Event.Victim, False);
+				RestartPlayer(Event.Victim, False, False);
 				if (!Event.Victim.IsFakePlayer) {
 					XmlRpc::OnArmorEmpty(Event);
 				}
@@ -479,7 +481,7 @@ foreach (Event in PendingEvents) {
 		}
 		case CSmModeEvent::EType::OnPlayerRequestRespawn: {
 			if (Event.Player != Null) {
-				RestartPlayer(Event.Player, False);
+				RestartPlayer(Event.Player, False, False);
 				if (!Event.Player.IsFakePlayer) {
 					XmlRpc::OnPlayerRequestRespawn(Event);
 				}
@@ -539,7 +541,7 @@ foreach (Event in PendingEvents) {
 foreach (Player in Players) {
 	switch (Player.SpawnStatus) {
 		case CSmPlayer::ESpawnStatus::NotSpawned: {
-			RestartPlayer(Player, False);
+			RestartPlayer(Player, False, False);
 		}
 		case CSmPlayer::ESpawnStatus::Spawned: {
 			if (Player.RequestsSpectate) {
@@ -631,14 +633,9 @@ foreach (Event in XmlRpc.PendingEvents) {
 				declare CSmBlockPole Target <=> Null;
 				foreach (Pole in BlockPoles) {
 					if (!IsCheckpoint(Pole)) continue;
-					if (Pole.Order == Index) {
-						if (Target == Null) {
-							Target <=> Pole;
-						} else {
-							Target <=> Null;
-							break;
-						}
-					}
+					if (Pole.Order != Index) continue;
+					Target <=> Pole;
+					break;
 				}
 				if (Target == Null) {
 					declare PoleIndex = 0;
@@ -655,12 +652,11 @@ foreach (Event in XmlRpc.PendingEvents) {
 					// Invalid pole
 					UI.SendChat("$f00Invalid Checkpoint Index '"^Index^"'!");
 					continue;
-				} else {
-					// Jump
-					UI.SendChat("$0f0Jumping to Checkpoint '"^Index^"'!");
-					PlayerCPId = Target.Id;
-					RestartPlayer(Player, False);
 				}
+				// Jump
+				UI.SendChat("$0f0Jumping to Checkpoint '"^Index^"'!");
+				PlayerCPId = Target.Id;
+				RestartPlayer(Player, False, True);
 			} else {
 				// Jump to player
 				declare Target = Tools::GetPlayer(Params[1]);
@@ -668,13 +664,12 @@ foreach (Event in XmlRpc.PendingEvents) {
 					// Invalid target
 					UI.SendChat("$f00Invalid Jump Target '"^Params[1]^"'!");
 					continue;
-				} else {
-					// Jump
-					UI.SendChat("$0f0Jumping to '"^Target.Login^"'!");
-					declare LastCheckpointId as TargetCPId for Target = NullId;
-					PlayerCPId = TargetCPId;
-					RestartPlayer(Player, False);
 				}
+				// Jump
+				UI.SendChat("$0f0Jumping to '"^Target.Login^"'!");
+				declare LastCheckpointId as TargetCPId for Target = NullId;
+				PlayerCPId = TargetCPId;
+				RestartPlayer(Player, False, True);
 			}
 			
 			// Invalidate time
@@ -1589,7 +1584,7 @@ Void FillUpPlayerAmmo(CSmPlayer _Player) {
 }
 
 // Restart a player
-Void RestartPlayer(CSmPlayer _Player, Boolean _FullRestart) {
+Void RestartPlayer(CSmPlayer _Player, Boolean _FullRestart, Boolean _Jump) {
 	if (_Player == Null || _Player.RequestsSpectate || _Player.Score == Null) return;
 	declare Delay = 3500;
 	if (StartTime > Now + Delay) {
@@ -1601,7 +1596,7 @@ Void RestartPlayer(CSmPlayer _Player, Boolean _FullRestart) {
 	
 	SetPlayerReloadAllWeapons(_Player, S_FullAmmoSpawn);
 	
-	if (!_FullRestart && CheckpointsTimeLast.count > 0) {
+	if (_Jump || !_FullRestart && CheckpointsTimeLast.count > 0) {
 		// Check respawn behavior
 		declare UI <=> UIManager.GetUI(_Player);
 		declare RespawnOnCheckpoint = True;
@@ -1891,7 +1886,7 @@ Text CreateLayerUtilities() {
 		<quad sizen="8 8" style="BgRaceScore2" substyle="Tv" halign="right" valign="center2"/>
 		<label id="Label_SpectateCount" posn="-9 0" style="TextTitle1" textsize="3" text="0" halign="right" valign="center2"/>
 	</frame>
-	<label id="Label_Choose" posn="100 -87" halign="center" valign="center" scale="0.7" style="CardButtonSmall" scriptevents="1" hidden="1"/>""";
+	<label id="Label_Choose" posn="105 -87" halign="center" valign="center" scale="0.7" style="CardButtonSmall" scriptevents="1" hidden="1"/>""";
 	return Manialink;
 }
 
@@ -1907,7 +1902,7 @@ Void UpdateLayerUtilities() {
 		declare netread Net_CustomRestartTime for UI = 0;
 		if (Net_CustomRestartTime > LastCustomRestartTime) {
 			LastCustomRestartTime = Net_CustomRestartTime;
-			RestartPlayer(Player, True);
+			RestartPlayer(Player, True, False);
 		}
 		
 		// Publish respawn behavior
