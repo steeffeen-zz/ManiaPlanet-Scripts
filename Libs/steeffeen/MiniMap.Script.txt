@@ -13,7 +13,8 @@
 	CONSTANTS
 ***************************************/
 
-#Const	Version		"2013-08-25"
+#Const	Version				"2013-12-08"
+#Const	ScriptName			"MiniMap.Script.txt"
 
 #Const	C_QuadSize			130.		// Width/Height of the map quad
 #Const	C_SpotSize			5.			// Width/Height of each object spot
@@ -114,9 +115,11 @@ Void Build() {
 		}
 		
 		Void PrepareMap() {
-			// Set header text
-			declare Label_Header <=> (Page.GetFirstChild("Label_Header") as CMlLabel);
-			Label_Header.Value = TextLib::Compose("$<%1$> %2 $<%3$>", Map.MapInfo.Name, _("|Made by|by"), Map.MapInfo.AuthorLogin);
+			id (Map != Null && Map.MapInfo != Null) {
+				// Set header text
+				declare Label_Header <=> (Page.GetFirstChild("Label_Header") as CMlLabel);
+				Label_Header.Value = TextLib::Compose("$<%1$> %2 $<%3$>", Map.MapInfo.Name, _("|Made by|by"), Map.MapInfo.AuthorLogin);
+			}
 			
 			// Get map size
 			G_MiniMap_CoordsLow = <-1., -1., -1.>;

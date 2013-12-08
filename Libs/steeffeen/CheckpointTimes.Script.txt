@@ -15,6 +15,7 @@
 *************************/
 
 #Const	Version		"2013-09-07"
+#Const	ScriptName	"CheckpointTimes.Script.txt"
 
 /*************************
 	GLOBALES

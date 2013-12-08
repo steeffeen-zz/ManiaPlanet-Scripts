@@ -14,6 +14,7 @@
 ***************************************/
 
 #Const	Version				"2013-09-08"
+#Const	ScriptName			"Records.Script.txt"
 
 #Const	C_AuthCode			"sdnfg3849g3jk4gn34g93i4gnshkjdnf23asdfn"
 #Const	C_MapCode			"sdbhfnsdfgn87dfghij3gnjksdhfng34g3923asnfbg432rh89wef"
@@ -104,7 +105,7 @@ Void Private_DelayRequest(Text _Url, Text _Data) {
 
 // Submit map
 Void SubmitMap(Boolean _Solo) {
-	if (G_Records_Permitted) return;
+	if (G_Records_Permitted || Map == Null || Map.MapInfo == Null) return;
 	declare metadata ObjectiveAuthor for Map = -1;
 	declare metadata ObjectiveGold for Map = -1;
 	declare metadata ObjectiveSilver for Map = -1;

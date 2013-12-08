@@ -10,7 +10,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const ScriptName				"Obstacle.Script.txt"
-#Const Version					"2.0 (2013-12-05)"
+#Const Version					"2.01 (2013-12-08)"
 #Const CompatibleMapTypes		"ObstacleArena,ObstacleTitleArena,TimeAttackArena"
 
 /*********************************************
@@ -128,7 +128,7 @@ Press {{{OpenSpecial4Text}}}F6{{{CloseText}}} to get an Overview of the Map.""";
 
 SpawnScreen::AddSubsection(_("Rules"), ModeRules, 5.);
 
-SpawnScreen::CreatePrettyRules("Obstacle");
+SpawnScreen::CreatePrettyRules(G_ModeName);
 ***
 
 ***ScoresTable***
@@ -749,7 +749,11 @@ foreach (Score in Scores) {
 		Score.LadderRankSortValue = RunBest;
 	} else {
 		declare CheckpointsTimeLast for Score = Integer[Ident];
-		Score.LadderRankSortValue = MathLib::NearestInteger(Worst * (2. - (1. * CheckpointsTimeLast.count / (1. * G_CheckpointsTotal))));
+		declare SortValue = MathLib::ToReal(Worst);
+		if (G_CheckpointsTotal > 0) {
+			SortValue *= 2. - (1. * CheckpointsTimeLast.count / (1. * G_CheckpointsTotal));
+		}
+		Score.LadderRankSortValue = MathLib::NearestInteger(SortValue);
 	}
 }
 ScoreTimes = ScoreTimes.sort();
@@ -1161,41 +1165,46 @@ Void PrepareMap() {
 
 // Update the ranking of the players
 Void UpdateRanking() {
-	declare Ranking = Integer[Integer];
-	declare Ranked = Integer[Integer];
-	declare Unranked = CSmScore[];
+	// Split finished and unfinished players
+	declare Finished = CSmScore[];
+	declare Unfinished = CSmScore[];
 	
-	// Split finished & unfinished players
-	foreach (ScoreId => Score in Scores) {
+	foreach (Score in Scores) {
 		declare RunBest for Score = -1;
 		if (RunBest > 0) {
-			Ranked[ScoreId] = RunBest;
+			Finished.add(Score);
 		} else {
-			Unranked.add(Score);
+			Unfinished.add(Score);
 		}
 	}
 	
-	// Sort finished players by times
-	Ranking = Ranked.sort();
-	
-	// Sort unfinished players by checkpoints
-	Ranked = Integer[Integer];
-	foreach (ScoreId => Score in Unranked) {
+	// Unfinished players based on checkpoints reached
+	foreach (Score in Unfinished) {
 		declare CheckpointsTimeLast for Score = Integer[Ident];
-		Ranked[ScoreId] = G_CheckpointsTotal - CheckpointsTimeLast.count;
-	}
-	Ranked = Ranked.sort();
-	foreach (ScoreId => CPCount in Ranked) {
-		Ranking[ScoreId] = CPCount;
+		declare Points = CheckpointsTimeLast.count;
+		
+		// Penalty for offline players
+		declare Player = Tools::GetPlayer(Score.User.Login);
+		if (Player == Null) {
+			Points -= G_CheckpointsTotal;
+		}
+		
+		Score.Points = 3 * Points;
 	}
 	
-	declare RankIndex = 1;
-	foreach (ScoreId => Time in Ranking) {
-		if (!Scores.existskey(ScoreId)) continue;
-		declare Rank for Scores[ScoreId] = -1;
-		Rank = RankIndex;
-		Scores[ScoreId].Points = Scores.count - Rank + 1;
-		RankIndex += 1;
+	// Finished players based on their times
+	declare FinishTimes = Integer[Ident];
+	declare Worst = -1;
+	foreach (Score in Finished) {
+		declare RunBest for Score = -1;
+		declare Time = RunBest / 1000;
+		FinishTimes[Score.Id] = Time;
+		if (RunBest > Worst) {
+			Worst = Time;
+		}
+	}
+	foreach (ScoreId => Time in FinishTimes) {
+		Scores[ScoreId].Points = Worst - Time + 4 * G_CheckpointsTotal;
 	}
 }
 
