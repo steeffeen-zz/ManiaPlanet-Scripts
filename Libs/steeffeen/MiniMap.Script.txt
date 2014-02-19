@@ -13,7 +13,7 @@
 	CONSTANTS
 ***************************************/
 
-#Const	Version				"2013-12-08"
+#Const	Version				"2014-02-19"
 #Const	ScriptName			"MiniMap.Script.txt"
 
 #Const	C_QuadSize			130.		// Width/Height of the map quad
@@ -139,9 +139,14 @@ Void Build() {
 					}
 				}
 			}
+			
 			// Get differences
 			for (Index, 0, 2) {
-				G_MiniMap_CoordsDiff[Index] = G_MiniMap_CoordsHigh[Index] - G_MiniMap_CoordsLow[Index];
+				declare CoordsDiff = G_MiniMap_CoordsHigh[Index] - G_MiniMap_CoordsLow[Index];
+				if (CoordsDiff == 0.) {
+					CoordsDiff = 5.;
+				}
+				G_MiniMap_CoordsDiff[Index] = CoordsDiff;
 			}
 			
 			// Prepare blocks
