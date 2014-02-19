@@ -72,6 +72,7 @@ Void Build() {
 		
 		#Const	C_QuadSize		{{{C_QuadSize - 2. * C_Margin}}}
 		#Const	C_LabelOffset	{{{C_LabelOffset}}}
+		#Const	C_DefaultCoord	-0.333
 		
 		declare Vec3	G_MiniMap_CoordsLow;
 		declare Vec3	G_MiniMap_CoordsHigh;
@@ -122,19 +123,15 @@ Void Build() {
 			}
 			
 			// Get map size
-			G_MiniMap_CoordsLow = <-1., -1., -1.>;
-			G_MiniMap_CoordsHigh = <-1., -1., -1.>;
+			G_MiniMap_CoordsLow = <C_DefaultCoord, C_DefaultCoord, C_DefaultCoord>;
+			G_MiniMap_CoordsHigh = <C_DefaultCoord, C_DefaultCoord, C_DefaultCoord>;
 			foreach (Block in Blocks) {
 				declare Posi = Block.Position;
 				for (Index, 0, 2) {
-					if (G_MiniMap_CoordsLow[Index] < Posi[Index] || G_MiniMap_CoordsLow[Index] < 0.) {
-						if (Posi[Index] >= 1.) {
-							G_MiniMap_CoordsLow[Index] = Posi[Index] - 1.;
-						} else {
-							G_MiniMap_CoordsLow[Index] = Posi[Index];
-						}
+					if (G_MiniMap_CoordsLow[Index] > Posi[Index] - 1. || G_MiniMap_CoordsLow[Index] == C_DefaultCoord) {
+						G_MiniMap_CoordsLow[Index] = Posi[Index] - 1.;
 					}
-					if (G_MiniMap_CoordsHigh[Index] > Posi[Index] || G_MiniMap_CoordsHigh[Index] < 0.) {
+					if (G_MiniMap_CoordsHigh[Index] < Posi[Index] + 1. || G_MiniMap_CoordsHigh[Index] == C_DefaultCoord) {
 						G_MiniMap_CoordsHigh[Index] = Posi[Index] + 1.;
 					}
 				}
