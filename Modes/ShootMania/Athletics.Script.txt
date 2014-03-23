@@ -23,7 +23,7 @@
 #Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
 
 #Const	CompatibleMapTypes	"AthleticsArena"
-#Const	Version 			"0.6.7 (2013-12-02)"
+#Const	Version 			"0.6.8 (2014-03-23)"
 
 // SETTINGS
 #Setting	S_TimeLimit			16		as _("Time Limit per Map (Minutes)")
@@ -32,7 +32,7 @@
 // CONSTANTS
 #Const	C_NeutralEmblemUrl		""
 // Gameplay contants
-#Const	C_PointsPerDiscipline	100.0			// Points granted to the winner of a certain discipline
+#Const	C_PointsPerDiscipline	100.			// Points granted to the winner of a certain discipline
 
 // TEXTS
 #Const	Description				_("Compete against other international $<$08fAthletes$> in different Disciplines!")
@@ -107,7 +107,7 @@ foreach (Base in Bases) {
 foreach (Pole in BlockPoles) {
 	Pole.Captured = True;
 	Pole.Gauge.Clan = 0;
-	Pole.Gauge.ValueReal = 1.0;
+	Pole.Gauge.ValueReal = 1.;
 }
 UIManager.UIAll.Hud3dMarkers = GetHud3dMarkers();
 MarkersLayer.ManialinkPage = GetMarkersLayerManialink();
@@ -119,10 +119,10 @@ UIManager.UIAll.UILayers.add(TabsLayer);
 
 // Scores table
 ScoresTable::Load();
-ScoresTable::SetColumnsWidth(2.0, 2.0, 3.0, 19.0, 1.5, 1.5, 0.0, 0.0, 0.0, 0.0, 5.5);
+ScoresTable::SetColumnsWidth(2., 2., 3., 19., 1.5, 1.5, 0., 0., 0., 0., 5.5);
 ScoresTable::SetColumnsName("", "", "", "", "Score");
 ScoresTable::SetTableFormat(2, 8);
-ScoresTable::SetTableWidth(239.0);
+ScoresTable::SetTableWidth(239.);
 ScoresTable::Build();
 ScoresTable::GetLayerScoresTable().Type = CUILayer::EUILayerType::Normal;
 
@@ -214,10 +214,13 @@ foreach (Player in Players) {
 								// Check for jump length
 								declare AirTimeBegin for Player = -1;
 								if (AirTimeBegin >= 0) {
-									declare Vec3 AirTimeBeginPosition for Player;
-									declare Distance = MathLib::Distance(AirTimeBeginPosition, Player.Position);
-									EvaluateTry(Player, Distance, False);
 									AirTimeBegin = -1;
+									declare Boolean ValidJump for Player = True;
+									if (ValidJump) {
+										declare Vec3 AirTimeBeginPosition for Player;
+										declare Distance = MathLib::Distance(AirTimeBeginPosition, Player.Position);
+										EvaluateTry(Player, Distance, False);
+									}
 								}
 							} else {
 								declare AirTimeBegin for Player = -1;
@@ -226,33 +229,35 @@ foreach (Player in Players) {
 									AirTimeBegin = Now;
 									declare Vec3 AirTimeBeginPosition for Player;
 									AirTimeBeginPosition = Player.Position;
+									declare Boolean ValidJump for Player;
+									ValidJump = IsPlayerInMapArea(Player);
 								}
 							}
 						}
 						case 2: {
 							// High jumping
-							declare LastHeight for Player = 0.0;
-							declare JumpStartHeight for Player = 0.0;
-							declare MaxJumpHeight for Player = 0.0;
+							declare LastHeight for Player = 0.;
+							declare JumpStartHeight for Player = 0.;
+							declare MaxJumpHeight for Player = 0.;
 							declare HighJumpStart for Player = False;
 							
 							if (Player.IsTouchingGround) {
 								// Track jump start height
 								JumpStartHeight = Player.Position.Y;
-								MaxJumpHeight = 0.0;
+								MaxJumpHeight = 0.;
 							} else {
 								// Check for jump height
 								if (Player.Position.Y > LastHeight) {
 									HighJumpStart = True;
 									if (Player.Position.Y-JumpStartHeight > MaxJumpHeight) {
 										// Height increased
-										MaxJumpHeight = Player.Position.Y-JumpStartHeight;
+										MaxJumpHeight = Player.Position.Y - JumpStartHeight;
 									}
 								} else {
 									if (HighJumpStart) {
 										// Evaluate try
 										EvaluateTry(Player, MaxJumpHeight, False);
-										MaxJumpHeight = 0.0;
+										MaxJumpHeight = 0.;
 									}
 									HighJumpStart = False;
 								}
@@ -265,7 +270,7 @@ foreach (Player in Players) {
 								if (Discipline == G_DisciplineGoals[Player.BlockPole.Id]) {
 									// Player reached finish
 									declare Time = Now - Player.StartTime;
-									EvaluateTry(Player, Time/1000.0, True);
+									EvaluateTry(Player, Time / 1000., True);
 									UnspawnPlayer(Player);
 								}
 							}
@@ -284,7 +289,7 @@ foreach (Player in Players) {
 									RoundsStartId = Player.BlockPole.Id;
 									if (UI != Null) {
 										UI.SendNotice(
-											"""Start: {{{(Now-Player.StartTime)/1000.0}}}""", CUIConfig::ENoticeLevel::Default, 
+											"""Start: {{{(Now - Player.StartTime) / 1000.}}}""", CUIConfig::ENoticeLevel::Default, 
 											Null, CUIConfig::EAvatarVariant::Default, 
 											CUIConfig::EUISound::Checkpoint, 4);
 									}
@@ -299,7 +304,7 @@ foreach (Player in Players) {
 											if (RoundsCount >= G_DisciplineRoundsCount[Discipline]) {
 												// Run finished
 												declare Time = Now - Player.StartTime;
-												EvaluateTry(Player, Time/1000.0, True);
+												EvaluateTry(Player, Time / 1000., True);
 												if (UI != Null) {
 													UI.SendNotice(
 														"", CUIConfig::ENoticeLevel::Default, 
@@ -310,7 +315,7 @@ foreach (Player in Players) {
 											} else {
 												if (UI != Null) {
 													UI.SendNotice(
-														"""Round {{{RoundsCount}}}/{{{G_DisciplineRoundsCount[Discipline]}}}: {{{(Now-Player.StartTime)/1000.0}}}""", CUIConfig::ENoticeLevel::Default, 
+														"""Round {{{RoundsCount}}}/{{{G_DisciplineRoundsCount[Discipline]}}}: {{{(Now - Player.StartTime) / 1000.}}}""", CUIConfig::ENoticeLevel::Default, 
 														Null, CUIConfig::EAvatarVariant::Default, 
 														CUIConfig::EUISound::Checkpoint, 1);
 												}
@@ -322,7 +327,7 @@ foreach (Player in Players) {
 											RoundsCPs.add(Player.BlockPole.Id);
 											if (UI != Null) {
 												UI.SendNotice(
-													"""CP {{{RoundsCPs.count}}}: {{{(Now-Player.StartTime)/1000.0}}}""", CUIConfig::ENoticeLevel::Default, 
+													"""CP {{{RoundsCPs.count}}}: {{{(Now-Player.StartTime)/1000.}}}""", CUIConfig::ENoticeLevel::Default, 
 													Null, CUIConfig::EAvatarVariant::Default, 
 													CUIConfig::EUISound::Checkpoint, 1);
 											}
@@ -342,32 +347,37 @@ foreach (Player in Players) {
 foreach (Event in PendingEvents) {
 	switch (Event.Type) {
 		case CSmModeEvent::EType::OnArmorEmpty: {
-			if (Event.Victim != Null && Event.Shooter == Null) {
-				// Offzone
-				declare Text Discipline for Event.Victim;
-				switch (Discipline) {
-					case "": {
-					}
-					default: {
-						switch (G_Disciplines[Discipline]) {
-							case 1: {
-								// Long jumping - Check for jump length
-								declare AirTimeBegin for Event.Victim = -1;
-								if (AirTimeBegin >= 0) {
+			if (Event.Victim == Null || Event.Shooter != Null) {
+				Discard(Event);
+				continue;
+			}
+			// Offzone
+			declare Text Discipline for Event.Victim;
+			switch (Discipline) {
+				case "": {
+					// In lobby
+				}
+				default: {
+					// In discipline
+					switch (G_Disciplines[Discipline]) {
+						case 1: {
+							// Long jumping - Check for jump length
+							declare AirTimeBegin for Event.Victim = -1;
+							if (AirTimeBegin >= 0) {
+								AirTimeBegin = -1;
+								declare ValidJump for Event.Victim = True;
+								if (ValidJump) {
 									declare Vec3 AirTimeBeginPosition for Event.Victim;
 									declare Distance = MathLib::Distance(AirTimeBeginPosition, Event.Victim.Position);
 									EvaluateTry(Event.Victim, Distance, False);
-									AirTimeBegin = -1;
 								}
 							}
 						}
 					}
 				}
-				UnspawnPlayer(Event.Victim);
-				Discard(Event);
-			} else {
-				Discard(Event);
 			}
+			UnspawnPlayer(Event.Victim);
+			Discard(Event);
 		}
 		case CSmModeEvent::EType::OnHit: {
 			Discard(Event);
@@ -502,12 +512,13 @@ Text GetUnitForDiscipline(Text _Discipline) {
 }
 
 // Send callback to inform that a player started a discipline
-Void SendCallbackPlayerDisciplineStart(Text _Login, Text _Discipline) {
+Void SendCallbackPlayerDisciplineStart(Text _Login, Text _Discipline, Boolean _Spectating) {
 	declare Data =
 """{
 	"Login": "{{{_Login}}}",
 	"Discipline": "{{{_Discipline}}}",
-	"Unit": "{{{GetUnitForDiscipline(_Discipline)}}}"
+	"Unit": "{{{GetUnitForDiscipline(_Discipline)}}}",
+	"Spectating": {{{_Spectating}}}
 }""";
 	XmlRpc.SendCallback("playerDisciplineStart", Data);
 }
@@ -575,12 +586,25 @@ Void UpdateDiscipline(CSmPlayer _Player, Text _Discipline) {
 	declare Text Discipline for _Player;
 	Discipline = _Discipline;
 	if (!_Player.IsFakePlayer) {
-		SendCallbackPlayerDisciplineStart(_Player.Login, Discipline);
+		SendCallbackPlayerDisciplineStart(_Player.Login, Discipline, False);
 	}
+	
+	// Announce discipline
 	if (_Discipline == "") {
 		Message::SendStatusMessage(_Player, "Lobby", 3000, 2);
 	} else {
 		Message::SendStatusMessage(_Player, Discipline, 3000, 2);
+	}
+	
+	// Update spectating players as well
+	foreach (Spectator in Spectators) {
+		declare UI <=> UIManager.GetUI(Spectator);
+		if (UI != Null) {
+			declare netread Net_CurrentSpecTarget for UI = "";
+			if (Net_CurrentSpecTarget == _Player.Login) {
+				SendCallbackPlayerDisciplineStart(Spectator.Login, Discipline, True);
+			}
+		}
 	}
 }
 
@@ -596,9 +620,9 @@ Text GetDisciplineName(CSmBlockPole _Pole) {
 
 // Get discipline type of a goal
 Text GetGoalType(CSmBlockPole _Pole) {
-	for (Index, 0, TextLib::Length(_Pole.Tag)-1) {
+	for (Index, 0, TextLib::Length(_Pole.Tag) - 1) {
 		if (TextLib::SubString(_Pole.Tag, Index, 1) == ":") {
-			return TextLib::SubString(_Pole.Tag, Index+2, TextLib::Length(_Pole.Tag)-2-Index);
+			return TextLib::SubString(_Pole.Tag, Index + 2, TextLib::Length(_Pole.Tag) - 2 - Index);
 		}
 	}
 	return "";
@@ -748,7 +772,7 @@ Void MySpawnPlayer(CSmPlayer _Player) {
 // Updates score of a player depending on his performances in the different disciplines
 Void UpdatePlayerScore(CSmScore _Score) {
 	if (_Score != Null) {
-		declare Points = 0.0;
+		declare Points = 0.;
 		declare Real[Text] DisciplineRecords for _Score;
 		declare Real[Text] DisciplinePoints for _Score;
 		
@@ -785,19 +809,19 @@ Void UpdateAllDisciplinesScores() {
 
 // Evaluate try and announce result
 Void EvaluateTry(CSmPlayer _Player, Real _Value, Boolean _TimeValue) {
-	if (_Player.Score != Null && _Value > 0.0) {
+	if (_Player.Score != Null && _Value > 0.) {
 		declare Real Factor;
 		if (_TimeValue) {
-			Factor = -1.0;
+			Factor = -1.;
 		} else {
-			Factor = 1.0;
+			Factor = 1.;
 		}
 		declare Text Discipline for _Player;
 		declare Real[Text] DisciplineRecords for _Player.Score;
-		if (!DisciplineRecords.existskey(Discipline) || _Value*Factor > DisciplineRecords[Discipline]*Factor) {
+		if (!DisciplineRecords.existskey(Discipline) || _Value * Factor > DisciplineRecords[Discipline] * Factor) {
 			// New record!
 			DisciplineRecords[Discipline] = _Value;
-			if (!G_DisciplineRecords.existskey(Discipline) || _Value*Factor > G_DisciplineRecords[Discipline]*Factor) {
+			if (!G_DisciplineRecords.existskey(Discipline) || _Value * Factor > G_DisciplineRecords[Discipline] * Factor) {
 				G_DisciplineRecords[Discipline] = _Value;
 			}
 			// Announce record
@@ -838,6 +862,7 @@ Text GetUtilityLayerManialink() {
 			declare netread Net_Discipline for UI = "";
 			declare netwrite Integer Net_LobbyReset for UI;
 			Net_LobbyReset = -1;
+			declare netwrite Net_CurrentSpecTarget for UI = "";
 			
 			declare LastUIUpdate = 0;
 			declare Vec3 LastPosition;
@@ -852,8 +877,8 @@ Text GetUtilityLayerManialink() {
 						case CMlEvent::Type::KeyPress: {
 							switch (Event.CharPressed) {
 								case "2555904": {
-									if (Net_Discipline != "" &&
-										(InputPlayer == Null || InputPlayer.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned)) {
+									// F3
+									if (Net_Discipline != "") {
 										Net_LobbyReset = Now;
 									}
 								}
@@ -863,31 +888,37 @@ Text GetUtilityLayerManialink() {
 				}
 				
 				// UI update
-				if (LastUIUpdate + 350 < Now) {
-					LastUIUpdate = Now;
-					
-					// Show current discipline
-					if (Net_Discipline == "") {
-						DisciplineLabel.Value = "{{{C_LobbyName}}}";
+				if (LastUIUpdate + 350 > Now) continue;
+				LastUIUpdate = Now;
+				
+				// Current spec target
+				if (InputPlayer != GUIPlayer && GUIPlayer != Null) {
+					Net_CurrentSpecTarget = GUIPlayer.Login;
+				} else {
+					Net_CurrentSpecTarget = "";
+				}
+				
+				// Show current discipline
+				if (Net_Discipline == "") {
+					DisciplineLabel.Value = "{{{C_LobbyName}}}";
+				} else {
+					DisciplineLabel.Value = Net_Discipline;
+				}
+				
+				// Calculate + show speed
+				if (InputPlayer != Null && InputPlayer.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned && Net_Discipline != "") {
+					if (LastPositionTime >= 0) {
+						declare Speed = 3.6*(MathLib::Distance(LastPosition, InputPlayer.Position) / ((Now - LastPositionTime) / 1000.));
+						Speed = MathLib::NearestInteger(Speed * 100.) / 100.;
+						SpeedLabel.Value = "$fff"^Speed^" km/h";
+						LastPosition = InputPlayer.Position;
+						LastPositionTime = Now;
 					} else {
-						DisciplineLabel.Value = Net_Discipline;
+						LastPosition = InputPlayer.Position;
+						LastPositionTime = Now;
 					}
-					
-					// Calculate + show speed
-					if (InputPlayer != Null && InputPlayer.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned && Net_Discipline != "") {
-						if (LastPositionTime >= 0) {
-							declare Speed = 3.6*(MathLib::Distance(LastPosition, InputPlayer.Position)/((Now-LastPositionTime)/1000.0));
-							Speed = MathLib::NearestInteger(Speed*100)/100.0;
-							SpeedLabel.Value = "$fff"^Speed^" km/h";
-							LastPosition = InputPlayer.Position;
-							LastPositionTime = Now;
-						} else {
-							LastPosition = InputPlayer.Position;
-							LastPositionTime = Now;
-						}
-					} else {
-						SpeedLabel.Value = "";
-					}
+				} else {
+					SpeedLabel.Value = "";
 				}
 			}
 		}
@@ -900,16 +931,17 @@ Text GetUtilityLayerManialink() {
 
 // Updates utility layer
 Void UpdateUtilityLayer(CSmPlayer _Player, CUIConfig _UI) {
-	if (_Player != Null && _Player.SpawnStatus != CSmPlayer::ESpawnStatus::Spawning && _UI != Null) {
-		// Check for lobby reset
-		declare LastLobbyReset for _UI = -1;
-		declare netread Net_LobbyReset for _UI = -1;
-		if (Net_LobbyReset > 0 && LastLobbyReset < Net_LobbyReset) {
-			// Reset player to lobby
-			LastLobbyReset = Net_LobbyReset;
-			UpdateDiscipline(_Player, "");
-			UnspawnPlayer(_Player);
-		}
+	if (_Player == Null || _Player.SpawnStatus == CSmPlayer::ESpawnStatus::Spawning) return;
+	if (_UI == Null) return;
+	
+	// Check for lobby reset
+	declare LastLobbyReset for _UI = -1;
+	declare netread Net_LobbyReset for _UI = -1;
+	if (Net_LobbyReset > 0 && LastLobbyReset < Net_LobbyReset) {
+		// Reset player to lobby
+		LastLobbyReset = Net_LobbyReset;
+		UpdateDiscipline(_Player, "");
+		UnspawnPlayer(_Player);
 	}
 }
 
@@ -1018,7 +1050,7 @@ Text GetMarkersLayerManialink() {
 	foreach (PortId => Discipline in G_DisciplinePorts) {
 		Manialink ^= """
 			<frame id="{{{BlockPoles[PortId].Tag}}}" hidden="1">
-				<quad sizen="{{{TextLib::Length(BlockPoles[PortId].Tag)*1.5}}} 5" posn="0 0 -1" style="BgsPlayerCard" substyle="BgActivePlayerScore" valign="center" halign="center"/>
+				<quad sizen="{{{TextLib::Length(BlockPoles[PortId].Tag) * 1.5}}} 5" posn="0 0 -1" style="BgsPlayerCard" substyle="BgActivePlayerScore" valign="center" halign="center"/>
 				<label text="{{{BlockPoles[PortId].Tag}}}" valign="center" halign="center"/>
 			</frame>""";
 	}
@@ -1039,12 +1071,12 @@ Text GetHud3dMarkers() {
 	declare Markers = "";
 	
 	foreach (GoalId => Discipline in G_DisciplinePorts) {
-		Markers ^= """<marker pos="{{{BlockPoles[GoalId].Position[0]}}} {{{BlockPoles[GoalId].Position[1]+5.0}}} {{{BlockPoles[GoalId].Position[2]}}}" manialinkframeid="{{{BlockPoles[GoalId].Tag}}}"/>""";
+		Markers ^= """<marker pos="{{{BlockPoles[GoalId].Position[0]}}} {{{BlockPoles[GoalId].Position[1] + 5.}}} {{{BlockPoles[GoalId].Position[2]}}}" manialinkframeid="{{{BlockPoles[GoalId].Tag}}}"/>""";
 	}
 	
 	declare Index = 0;
 	foreach (GoalId => Discipline in G_DisciplineGoals) {
-		Markers ^= """<marker pos="{{{BlockPoles[GoalId].Position[0]}}} {{{BlockPoles[GoalId].Position[1]+5.0}}} {{{BlockPoles[GoalId].Position[2]}}}" manialinkframeid="{{{BlockPoles[GoalId].Tag^Index}}}" """;
+		Markers ^= """<marker pos="{{{BlockPoles[GoalId].Position[0]}}} {{{BlockPoles[GoalId].Position[1] + 5.}}} {{{BlockPoles[GoalId].Position[2]}}}" manialinkframeid="{{{BlockPoles[GoalId].Tag^Index}}}" """;
 		Markers ^= """/>""";
 		Index += 1;
 	}
@@ -1062,7 +1094,7 @@ Integer GetIndexOfSubString(Text _String, Text _SubString) {
 				return Index - TextLib::Length(_SubString) + 1;
 			}
 		} else {
-			// String don't match - Reset
+			// Strings don't match - Reset
 			SubIndex = 0;
 		}
 	}
@@ -1177,7 +1209,7 @@ CUILayer CreateTabPaneLayer(Text[Text] TabsImages, Integer TabFramePosnX, Intege
 					}
 				}
 
-				// emulate clic on a given tab
+				// Emulate clic on a given tab
 				if (CurrentForcedTab != _TabsLib_ForcedTab) {
 					CurrentForcedTab = _TabsLib_ForcedTab;
 					ClickedId = CurrentForcedTab;
@@ -1219,7 +1251,7 @@ CUILayer CreateTabPaneLayer(Text[Text] TabsImages, Integer TabFramePosnX, Intege
 									if (Blinker != Null) Blinker.Hide();
 									
 									declare ClickedQuad <=> (Page.GetFirstChild("{{{QuadId}}}") as CMlQuad);
-									ClickedQuad.Scale = 1.0;
+									ClickedQuad.Scale = 1.;
 									PreviousClickedQuad.Scale = 0.8;
 									PreviousClickedQuad = ClickedQuad;
 								}
@@ -1292,13 +1324,13 @@ Real[Text] GetDisciplineRankings(Text _Discipline) {
 		declare Real[Text] DisciplineRecords for Score;
 		
 		if (DisciplineRecords.existskey(_Discipline)) {
-			declare Factor = 1.0;
+			declare Factor = 1.;
 			if (G_Disciplines[_Discipline] == 1 || G_Disciplines[_Discipline] == 2) {
-				Factor = -1.0;
+				Factor = -1.;
 			}
 			Rankings[Score.User.Name] = DisciplineRecords[_Discipline] * Factor;
 		} else {
-			Rankings[Score.User.Name] = 0.0;
+			Rankings[Score.User.Name] = 0.;
 		}
 	}
 	
@@ -1315,7 +1347,7 @@ Real[Text] GetDisciplineRankingPoints(Text _Discipline, Real[Text] _DisciplineRa
 				if (DisciplinePoints.existskey(_Discipline)) {
 					DisciplineRankingPoints[Name] = DisciplinePoints[_Discipline];
 				} else {
-					DisciplineRankingPoints[Name] = 0.0;
+					DisciplineRankingPoints[Name] = 0.;
 				}
 			}
 		}
@@ -1328,29 +1360,29 @@ Real[Text] GetDisciplineRankingPoints(Text _Discipline, Real[Text] _DisciplineRa
 Real CalculateDegree(Real _Base, Integer _Exp) {
 	if (_Exp > 0) {
 		declare Result = _Base;
-		for (Index, 0, _Exp-2) {
+		for (Index, 0, _Exp - 2) {
 			Result *= _Base;
 		}
 		return Result;
 	} else {
 		if (_Exp == 0) {
-			return 1.0;
+			return 1.;
 		}
 	}
-	return -1.0;
+	return -1.;
 }
 
 // Format a real to match given number of decimals
 Real FormatNumber(Real _Number, Integer _DecimalsCount) {
 	if (_DecimalsCount > 0) {
-		return MathLib::NearestInteger(_Number*CalculateDegree(10.0, _DecimalsCount))/CalculateDegree(10.0, _DecimalsCount);
+		return MathLib::NearestInteger(_Number * CalculateDegree(10., _DecimalsCount)) / CalculateDegree(10., _DecimalsCount);
 	}
 	return _Number;
 }
 
 Text GetCell(Integer _Col, Integer _Row, Text _RankText, Text _Name, Text _PointsText, Text _ValueText) {
 	return """
-		<frame posn="{{{8+120*(_Col-1)}}} {{{29+_Row*-8}}}">
+		<frame posn="{{{8 + 120 * (_Col - 1)}}} {{{29 + _Row * -8}}}">
 			<quad id="{{{_Name}}}" posn="-5 0 -1" sizen="114 7" halign="left" valign="center" bgcolor="0505" hidden="1"/>
 			<quad posn="-5 0 -2" sizen="114 7" halign="left" valign="center" bgcolor="0005"/>
 			<label posn="0 0.5" sizen="10 7" halign="center" valign="center" text="{{{_RankText}}}"/>
@@ -1361,7 +1393,7 @@ Text GetCell(Integer _Col, Integer _Row, Text _RankText, Text _Name, Text _Point
 }
 
 Real RoundPoints(Real _Points) {
-	return MathLib::NearestInteger(_Points*100.0) / 100.0;
+	return MathLib::NearestInteger(_Points * 100.) / 100.;
 }
 
 // Creates discipline ratings layer
@@ -1370,7 +1402,7 @@ Text GetDisciplineRankingsLayer(Text _Discipline) {
 	declare Real[Text] RankingsPoints = GetDisciplineRankingPoints(_Discipline, Rankings);
 	declare Real[Text] OtherRankings;
 	foreach (Name => Value in Rankings) {
-		if (Value == 0.0) {
+		if (Value == 0.) {
 			OtherRankings[Name] = Value;
 			declare Temp = Rankings.removekey(Name);
 		}
@@ -1421,17 +1453,17 @@ Text GetDisciplineRankingsLayer(Text _Discipline) {
 			}
 		--></script>
 		<frame id="{{{_Discipline}}}RankingsFrame" hidden="1">
-			<quad posn="0 42" sizen="239.0 108.5" halign="center" valign="top" bgcolor="0007"/>
+			<quad posn="0 42" sizen="239 108.5" halign="center" valign="top" bgcolor="0007"/>
 			<label posn="0 39.5" sizen="200 10" halign="center" valign="top" textprefix="$s" text="{{{_Discipline}}}"/>""";
 	declare Rank = 1;
 	declare Integer Row;
 	declare Integer Col;
 	foreach (Name => Value in Rankings) {
 		Col = 0;
-		if (Rank > 0.5 * (Rankings.count + 1.0)) {
+		if (Rank > 0.5 * (Rankings.count + 1.)) {
 			Col = 1;
 		} 
-		Row = Rank - 1 - Col*((Rankings.count+1)/2);
+		Row = Rank - 1 - Col * ((Rankings.count + 1) / 2);
 		
 		declare RankText = ""^Rank;
 		declare PointsText = "-";
@@ -1471,4 +1503,11 @@ Text GetCurrentRankings() {
 		String ^= Score.User.Login^":"^Score.Points^";";
 	}
 	return String;
+}
+
+// Check if player is in actual map area
+Boolean IsPlayerInMapArea(CSmPlayer _Player) {
+	if (_Player.Position.X < -15. || _Player.Position.X > 400.) return False;
+	if (_Player.Position.Z < -15. || _Player.Position.Z > 400.) return False;
+	return True;
 }
