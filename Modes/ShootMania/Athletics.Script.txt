@@ -23,7 +23,7 @@
 #Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
 
 #Const	CompatibleMapTypes	"AthleticsArena"
-#Const	Version 			"0.6.8 (2014-03-23)"
+#Const	Version 			"0.6.9 (2014-03-23)"
 
 // SETTINGS
 #Setting	S_TimeLimit			16		as _("Time Limit per Map (Minutes)")
@@ -511,6 +511,12 @@ Text GetUnitForDiscipline(Text _Discipline) {
 	return "";
 }
 
+// Convert boolean from maniascript to json
+Text ToJson(Boolean _Boolean) {
+	if (_Boolean) return "true";
+	return "false";
+}
+
 // Send callback to inform that a player started a discipline
 Void SendCallbackPlayerDisciplineStart(Text _Login, Text _Discipline, Boolean _Spectating) {
 	declare Data =
@@ -518,7 +524,7 @@ Void SendCallbackPlayerDisciplineStart(Text _Login, Text _Discipline, Boolean _S
 	"Login": "{{{_Login}}}",
 	"Discipline": "{{{_Discipline}}}",
 	"Unit": "{{{GetUnitForDiscipline(_Discipline)}}}",
-	"Spectating": {{{_Spectating}}}
+	"Spectating": {{{ToJson(_Spectating)}}}
 }""";
 	XmlRpc.SendCallback("playerDisciplineStart", Data);
 }
