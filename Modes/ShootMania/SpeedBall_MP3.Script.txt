@@ -7,7 +7,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const	ScriptName			"SpeedBall.Script.txt"
-#Const	Version				"2.2 (2014-03-31)"
+#Const	Version				"2.2 (2014-04-04)"
 #Const	CompatibleMapTypes	"SpeedBallArena,SpeedBallTitleArena"
 
 /*****************************************************
@@ -19,7 +19,6 @@
 #Include "Libs/Nadeo/Interface.Script.txt" as Interface
 #Include "Libs/Nadeo/Markers.Script.txt" as Markers
 #Include "Libs/Nadeo/Message.Script.txt" as Message
-#Include "Libs/Nadeo/MiniMap2.Script.txt" as MiniMap
 #Include "Libs/Nadeo/TabsServer.Script.txt" as Tabs
 #Include "Libs/Nadeo/Top2.Script.txt" as Top
 #Include "Libs/Nadeo/Victory.Script.txt" as Victory
@@ -56,8 +55,8 @@
 #Setting	S_DefaultCaptureTime		1.6		as "<hidden>"		// Default (not-reduced) capture time
 #Setting	S_WarmUpDuration			60		as "<hidden>"		// WarmUp duration
 #Setting	S_BotPower					10.		as "<hidden>"		// Power of the bots
-#Setting	S_NbBotsBlue				0		as "<hidden>"		// Number of bots of team blue
-#Setting	S_NbBotsRed					0		as "<hidden>"		// Number of bots of team red
+#Setting	S_NbBotsBlue				01		as "<hidden>"		// Number of bots of team blue
+#Setting	S_NbBotsRed					01		as "<hidden>"		// Number of bots of team red
 #Setting	S_ReduceLaserDamage			False	as "<hidden>"		// Reduce laser damage?
 
 /*****************************************************
@@ -136,7 +135,6 @@ MB_LogVersion(ScriptName, Version);
 MB_LogVersion(Interface::GetScriptName(), Interface::GetScriptVersion());
 MB_LogVersion(Markers::GetScriptName(), Markers::GetScriptVersion());
 MB_LogVersion(Message::GetScriptName(), Message::GetScriptVersion());
-MB_LogVersion(MiniMap::GetScriptName(), MiniMap::GetScriptVersion());
 MB_LogVersion(Score::GetScriptName(), Score::GetScriptVersion());
 MB_LogVersion(SM::GetScriptName(), SM::GetScriptVersion());
 MB_LogVersion(SpawnScreen::GetScriptName(), SpawnScreen::GetScriptVersion());
@@ -255,9 +253,26 @@ ST2::SetStyle("LibST_SMBaseTeams");
 ST2::SetStyle("LibST_SMBasePoints");
 ST2::SetStyle("LibST_SMWithLegends");
 ST2::SetFormat(2, 6);
+ST2::SetSizeRatio(<1.14, 1.>);
 ST2::SetTeamsScoresVisibility(True);
 ST2::CreateCol(C_ST_ColId_Damage, _("|Number of passes done|Passes"), "-", 2.8, 80.);
+ST2::SetColScript(C_ST_ColId_Damage, """
+	declare netread Net_Damage for _Score = -1;
+	if (Net_Damage > 0) {
+		Label_Col.Value = TL::ToText(Net_Damage);
+	} else {
+		Label_Col.Value = "";
+	}
+""");
 ST2::CreateCol(C_ST_ColId_Passes, _("|Amount of damage inflicted|Dmg"), "-", 2.8, 90.);
+ST2::SetColScript(C_ST_ColId_Passes, """
+	declare netread Net_Passes for _Score = -1;
+	if (Net_Passes > 0) {
+		Label_Col.Value = TL::ToText(Net_Passes);
+	} else {
+		Label_Col.Value = "";
+	}
+""");
 ST2::SetColLegend("LibST_SMRoundPoints", _("|Amount of points in the current round of the match|Round"));
 ST2::SetColLegend("LibST_SMPoints", _("|Total amount of points in the match|Total"));
 ST2::Build("SM");
@@ -303,13 +318,6 @@ ST2::Build("SM");
 	}
 	TeamStats::BuildManialink();
 }
-
-// MiniMap
-MiniMap::Load();
-MiniMap::WorldPositionFollow(True);
-MiniMap::MapYawFollow(True);
-MiniMap::Zoom(3.5);
-MiniMap::MapPosition(<0.5, 0.5>);
 ***
 
 ***StartMatch***
@@ -461,8 +469,6 @@ UseBeaconsWithRecipients = True;
 
 ***OnNewPlayer***
 ***
-//bye
-//ScoresTable::RestoreCustomScores(Player);
 Markers::Minimap_Add(Player.Login, Player, True, "Never", "WhenInFrame","file://Media/Manialinks/Common/Pointer.dds", Null);
 declare UI <=> UIManager.GetUI(Player);
 if (UI == Null) continue;
@@ -471,8 +477,6 @@ Tabs::UseTabs(UI, "ScoresTab");
 
 ***OnNewSpectator***
 ***
-//bye
-//ScoresTable::RestoreCustomScores(Spectator);
 RemoveMarker(Spectator.User);
 declare UI <=> UIManager.GetUI(Spectator);
 if (UI == Null) continue;
@@ -1017,7 +1021,6 @@ Interface::DestroyRank();
 SpawnScreen::DestroyRules();
 Markers::Unload();
 WarmUp2::Unload();
-MiniMap::Unload();
 Bots::Unload();
 UIManager.UILayerDestroyAll();
 ***
@@ -1207,10 +1210,6 @@ Void AddPoints(CSmPlayer _Player, Integer _Points) {
 	if (_Player == Null || _Player.Score == Null) return;
 	_Player.Score.RoundPoints += _Points;
 	_Player.Score.Points += _Points;
-//bye
-//	ScoresTable::SetFooterScore(_Player, TextLib::Compose("%1: %2		%3: %4",
-//		_("|A Round of the Match|Round"), TextLib::ToText(_Player.Score.RoundPoints),
-//		_("|Total Points|Total"), TextLib::ToText(_Player.Score.Points)));
 }
 
 // Update damage of the given player
@@ -1224,12 +1223,12 @@ Void UpdateDamage(CSmPlayer _Player, Integer _Points) {
 		Damage += _Points;
 		Top_Damage += _Points;
 	}
-//bye
+	declare netwrite Integer Net_Damage for _Player.Score;
 	if (Top_Damage > 0) {
-//		ScoresTable::SetCustom2(_Player, TextLib::ToText(Damage));
+		Net_Damage = Damage;
 		Top::SetRecord(_Player, T_Damage, TextLib::ToText(Top_Damage), -Top_Damage);
 	} else {
-//		ScoresTable::SetCustom2(_Player, "");
+		Net_Damage = -1;
 	}
 }
 
@@ -1244,12 +1243,12 @@ Void UpdatePasses(CSmPlayer _Player, Integer _Points) {
 		Passes += _Points;
 		Top_Passes += _Points;
 	}
-//bye
+	declare netwrite Integer Net_Passes for _Player.Score;
 	if (Passes > 0) {
-//		ScoresTable::SetCustom3(_Player, TextLib::ToText(Passes));
+		Net_Passes = Passes;
 		Top::SetRecord(_Player, T_Passes, TextLib::ToText(Top_Passes), -Top_Passes);
 	} else {
-//		ScoresTable::SetCustom3(_Player, "");
+		Net_Passes = -1;
 	}
 }
 
@@ -2196,11 +2195,7 @@ Void CheckSettings() {
 		---Rules---
 	}
 	if (UpdateFooter) {
-//bye
-		foreach (Player in Players) {
-//			ScoresTable::SetFooterStats(Player, TextLib::Compose(_("Rounds to win: %1 (Limit: %2)"),
-//				TextLib::ToText(Last_RoundsToWin), TextLib::ToText(Last_RoundsLimit)));
-		}
+		ST2::SetFooterText(TextLib::Compose(_("Rounds to win: %1 (Limit: %2)"), TextLib::ToText(Last_RoundsToWin), TextLib::ToText(Last_RoundsLimit)));
 	}
 }
 
