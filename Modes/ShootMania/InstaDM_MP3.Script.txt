@@ -11,7 +11,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const	CompatibleMapTypes	"MeleeArena,RoyalArena"
-#Const	Version				"1.1 (2014-03-31)"
+#Const	Version				"1.1 (2014-04-04)"
 #Const	ScriptName			"InstaDM.Script.txt"
 
 #Include "MathLib" as MathLib
@@ -48,7 +48,7 @@
 #Const	C_ST_ColId_Accuracy		"Accuracy"
 #Const	C_ST_ColId_KillDeath	"KillDeath"
 
-#Const	Description			_("$<$oObjective:$> Free For All! Hit as many Opponents as possible to win.")
+#Const	Description				_("$<$oObjective:$> Free For All! Hit as many Opponents as possible to win.")
 
 //	GLOBALES
 
@@ -100,6 +100,7 @@ ST2::SetStyle("LibST_SMBaseSolo");
 ST2::SetStyle("LibST_SMBasePoints");
 ST2::SetStyle("LibST_SMWithLegends");
 ST2::SetFormat(2, 6);
+ST2::SetSizeRatio(<1.1, 1.>);
 ST2::CreateCol(C_ST_ColId_Accuracy, _("|Accuracy|Acc."), "-", 2.8, 80.);
 ST2::SetColScript(C_ST_ColId_Accuracy, """
 	declare netread Net_Hitrate for _Score = -1;
@@ -449,7 +450,7 @@ Void SetFooterStats(CSmPlayer _Player) {
 	} else {
 		declare Message = "";
 		if (G_LongestHitDist > 0) {
-			Message = TextLib::Compose(_("Points Limit: %1,	Longest Hit: %2m by $<%3$>$z"),
+			Message = TextLib::Compose(_("Points Limit: %1\nLongest Hit: %2m by $<%3$>$z"),
 				TextLib::ToText(S_PointsLimit),
 				TextLib::ToText(G_LongestHitDist), G_LongestHitName);
 		} else {
