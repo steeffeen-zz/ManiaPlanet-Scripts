@@ -17,7 +17,6 @@
 #Include "MathLib" as MathLib
 #Include "TextLib" as TextLib
 #Include "Libs/Nadeo/Interface.Script.txt" as Interface
-#Include "Libs/Nadeo/Markers.Script.txt" as Markers
 #Include "Libs/Nadeo/Message.Script.txt" as Message
 #Include "Libs/Nadeo/TabsServer.Script.txt" as Tabs
 #Include "Libs/Nadeo/Top2.Script.txt" as Top
@@ -50,6 +49,7 @@
 #Setting	S_FriendlyFire				False	as _("Friendly fire (Damage team members)")
 #Setting	S_Mode						0		as _("Gameplay Mode (0: Normal, 1: Laser, 2: Random Weapon)")
 #Setting	S_ThrowableBall				False	as _("Use a throwable Ball")
+#Setting	S_RestrictBallMarker		False	as _("Restrict Ball Marker Visibility")
 
 // Hidden
 #Setting	S_DefaultCaptureTime		1.6		as "<hidden>"		// Default (not-reduced) capture time
@@ -133,7 +133,6 @@ declare Real[Integer]			G_MaxCapturePercentage;		// Maximum capture percentage r
 ***
 MB_LogVersion(ScriptName, Version);
 MB_LogVersion(Interface::GetScriptName(), Interface::GetScriptVersion());
-MB_LogVersion(Markers::GetScriptName(), Markers::GetScriptVersion());
 MB_LogVersion(Message::GetScriptName(), Message::GetScriptVersion());
 MB_LogVersion(Score::GetScriptName(), Score::GetScriptVersion());
 MB_LogVersion(SM::GetScriptName(), SM::GetScriptVersion());
@@ -220,7 +219,6 @@ SpawnScreen::CreateScores("Score.Points");
 Interface::CreateRank();
 // Hide map warnings to suppress the "Pole captured by X" message
 UIManager.UIAll.NoticesFilter_HideMapWarning = True;
-Markers::Load();
 
 // Warm up
 WarmUp2::Load();
@@ -433,7 +431,7 @@ UIManager.UIAll.SendNotice("",
 	CUIConfig::ENoticeLevel::MatchInfo, Null, CUIConfig::EAvatarVariant::Default,
 	CUIConfig::EUISound::StartRound, 0);
 Victory::RoundBegin();
-LayerMarkers.IsVisible = True;
+//byeLayerMarkers.IsVisible = True;
 LayerExtra.IsVisible = True;
 
 // Initialize values
@@ -451,7 +449,7 @@ UpdateBaseClans();
 G_MaxCapturePercentage = [1 => 0., 2 => 0.];
 
 // Update markers
-UpdateHud3dMarkers(False);
+UpdateHud3dMarkers();
 
 // Set round times
 StartTime = Now + 4000;
@@ -469,7 +467,6 @@ UseBeaconsWithRecipients = True;
 
 ***OnNewPlayer***
 ***
-Markers::Minimap_Add(Player.Login, Player, True, "Never", "WhenInFrame","file://Media/Manialinks/Common/Pointer.dds", Null);
 declare UI <=> UIManager.GetUI(Player);
 if (UI == Null) continue;
 Tabs::UseTabs(UI, "ScoresTab");
@@ -477,7 +474,6 @@ Tabs::UseTabs(UI, "ScoresTab");
 
 ***OnNewSpectator***
 ***
-RemoveMarker(Spectator.User);
 declare UI <=> UIManager.GetUI(Spectator);
 if (UI == Null) continue;
 Tabs::UseTabs(UI, "ScoresTab");
@@ -703,8 +699,6 @@ foreach (Event in PendingEvents) {
 				declare Integer DropTime for Event.Object;
 				DropTime = Now + 3000;
 				PassOn(Event);
-				
-				UpdateHud3dMarkers(True);
 			}
 		}
 		case CSmModeEvent::EType::OnCommand: {
@@ -732,7 +726,6 @@ foreach (Event in PendingEvents) {
 		}
 		case CSmModeEvent::EType::OnPlayerRemoved: {
 			// Player left the game
-			RemoveMarker(Event.User);
 			foreach (BallObjectId in G_BallObjectsIds) {
 				if (!Objects.existskey(BallObjectId)) continue;
 				declare BallObject <=> Objects[BallObjectId];
@@ -892,7 +885,7 @@ EndTime = -1;
 UIManager.UIAll.CountdownEndTime = -1;
 UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
 UpdateNetVariables();
-LayerMarkers.IsVisible = False;
+//byeLayerMarkers.IsVisible = False;
 MB_Sleep(2500);
 
 foreach (BallObjectId in G_BallObjectsIds) {
@@ -959,7 +952,6 @@ Victory::MatchEnd();
 ObjectDestroyAll();
 
 // UI
-Markers::Clear();
 Message::CleanAllMessages();
 UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
 
@@ -1019,7 +1011,6 @@ Top::Unload();
 TeamStats::Unload();
 Interface::DestroyRank();
 SpawnScreen::DestroyRules();
-Markers::Unload();
 WarmUp2::Unload();
 Bots::Unload();
 UIManager.UILayerDestroyAll();
@@ -1073,26 +1064,23 @@ Text GetColorizedPlayerName(CSmPlayer _Player) {
 
 // Update hud3dmarkers
 // None, Never, Always, WhenInFrustum, WhenVisible, WhenInMiddleOfScreen
-Void UpdateHud3dMarkers(Boolean _UseObjectId) {
+Void UpdateHud3dMarkers() {
 	declare MarkersXml = "";
+	
+	// Set restriction
+	declare netwrite Boolean Net_RestrictBallMarker for Teams[0];
+//	declare netwrite Boolean Net_RestrictBallMarker for UIManager.UIAll;
+	Net_RestrictBallMarker = S_RestrictBallMarker;
 
 	// Ball marker
 	foreach (Index => BallObjectId in G_BallObjectsIds) {
 		if (!Objects.existskey(BallObjectId)) continue;
 		declare BallObject <=> Objects[BallObjectId];
-		if (_UseObjectId) {
-			MarkersXml ^= """<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarker{{{Index}}}" box="0 1.2 0"/>
-				<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarkerHelp{{{Index}}}"
-					visibility="WhenInMiddleOfScreen" box="0 1.2 0"/>""";
-		} else if (BallObject.Player != Null) {
-			MarkersXml ^= """<marker playerlogin="{{{BallObject.Player.Login}}}" manialinkframeid="Frame_BallMarker{{{Index}}}" box="0 1.2 0"/>
-				<marker playerlogin="{{{BallObject.Player.Login}}}" manialinkframeid="Frame_BallMarkerHelp{{{Index}}}"
-					visibility="WhenInMiddleOfScreen" box="0 1.2 0"/>""";
-		} else {
-			MarkersXml ^= """<marker pos="{{{Tools::GetPosn(BallObject.Position)}}}" manialinkframeid="Frame_BallMarker{{{Index}}}" box="0 1.2 0"/>
-				<marker pos="{{{Tools::GetPosn(BallObject.Position)}}}" manialinkframeid="Frame_BallMarkerHelp{{{Index}}}"
-					visibility="WhenInMiddleOfScreen" box="0 1.2 0"/>""";
-		}
+		MarkersXml ^= """<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarker{{{Index}}}" box="0 1.2 0"/>
+			<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarkerHelp{{{Index}}}"
+				visibility="WhenInMiddleOfScreen" box="0 1.2 0"/>
+			<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarkerHelpe{{{Index}}}"
+				visibility="WhenVisible" box="0 1.2 0"/>""";
 	}
 	
 	// Gauge markers
@@ -1104,7 +1092,7 @@ Void UpdateHud3dMarkers(Boolean _UseObjectId) {
 		}
 	}
 
-	Markers::Add(MarkersXml);
+	UIManager.UIAll.MarkersXML = MarkersXml;
 }
 
 // Send hit message
@@ -1606,9 +1594,6 @@ Boolean PickUpBall(CSmPlayer _Player, CSmObject _Object) {
 	AddPoints(_Player, 2);
 	UpdateBaseClans();
 	
-	// Update markers
-	UpdateHud3dMarkers(False);
-	
 	return True;
 }
 
@@ -1622,9 +1607,6 @@ Void ResetBall(CSmObject _Ball) {
 	DropTime = -1;
 	declare Boolean AtHome for _Ball;
 	AtHome = True;
-	
-	// Update markers
-	UpdateHud3dMarkers(False);
 	
 	Message::SendBigMessage(_("The Ball has been reset!"), 3000, 1, CUIConfig::EUISound::PhaseChange, 1);
 	UpdateBaseClans();
@@ -1651,9 +1633,6 @@ Void DropBall(CSmObject _Ball, Vec3 _Position) {
 	
 	_Ball.SetPositionAndVel(_Position + <0., 1., 0.>, <0., 1., 0.>);
 	UpdateBaseClans();
-	
-	// Update markers
-	UpdateHud3dMarkers(False);
 }
 
 // Drop all balls carried by the player
@@ -1670,9 +1649,6 @@ Void DropBalls(CSmPlayer _Player) {
 		if (!Objects.existskey(ObjectIds[Index])) continue;
 		DropBall(Objects[ObjectIds[Index]], _Player.Position);
 	}
-	
-	// Update markers
-	UpdateHud3dMarkers(False);
 }
 
 // Player passes the ball
@@ -1708,9 +1684,6 @@ Void PassBall(CSmPlayer _Shooter, CSmPlayer _Victim, CSmObject _Ball) {
 		// Pass to opponent
 		UpdateBaseClans();
 	}
-	
-	// Update markers
-	UpdateHud3dMarkers(False);
 }
 
 // Updates clan scores at the top
@@ -1986,6 +1959,7 @@ Text CreateMarkersLayer() {
 			wait(InputPlayer != Null);
 			
 			declare Frame_BallMarkerHelp	<=> (Page.GetFirstChild("Frame_BallMarkerHelp0") as CMlFrame);
+			declare Frame_BallMarkerHelpe	<=> (Page.GetFirstChild("Frame_BallMarkerHelpe0") as CMlFrame);
 			declare Frame_BallMarker		<=> (Page.GetFirstChild("Frame_BallMarker0") as CMlFrame);
 			declare Label_BallMarker		<=> (Frame_BallMarker.GetFirstChild("Label_BallMarker") as CMlLabel);
 			declare Quad_BallMarker			<=>	(Frame_BallMarker.GetFirstChild("Quad_BallMarker") as CMlQuad);
@@ -1997,6 +1971,7 @@ Text CreateMarkersLayer() {
 			
 			declare netread Net_BallCarrierClan		for Teams[0] = Integer[Integer];
 			declare netread Net_RemainingDropTime	for Teams[0] = Integer[Integer];
+			declare netread Net_RestrictBallMarker	for Teams[0] = False;
 			
 			declare LastUIUpdate = -1;
 			declare LastUIUpdate2 = -1;
@@ -2033,8 +2008,11 @@ Text CreateMarkersLayer() {
 				}
 				
 				// Update ball marker
-				Quad_BallMarker.Visible = IsSpectatorMode || !Net_BallCarrierClan.existskey(0)
-					|| Teams.existskey(Net_BallCarrierClan[0] - 1) || !Frame_BallMarkerHelp.Visible;
+				Quad_BallMarker.Visible = IsSpectatorMode
+					|| !Net_BallCarrierClan.existskey(0)
+					|| Net_BallCarrierClan[0] == CurrentPlayer.CurrentClan
+					|| Net_RestrictBallMarker && Frame_BallMarkerHelpe.Visible
+					|| !Net_RestrictBallMarker && !Frame_BallMarkerHelp.Visible;
 				
 				if (Net_BallCarrierClan.existskey(0) && Teams.existskey(Net_BallCarrierClan[0] - 1)) {
 					// Team color
@@ -2085,6 +2063,7 @@ Text CreateMarkersLayer() {
 		}
 		--></script>
 		<frame id="Frame_BallMarkerHelp0" hidden="1"/>
+		<frame id="Frame_BallMarkerHelpe0" hidden="1"/>
 		<frame id="Frame_BallMarker0" hidden="1">
 			<label id="Label_BallMarker" sizen="9 16" posn="0.1 5.5" scale="0.9" textprefix="$f05" halign="center" valign="bottom"/>
 			<quad id="Quad_BallMarker" sizen="{{{9. * BallImageSize}}} {{{16. * BallImageSize}}}" image="file://Media/Images/SpeedBall/BallLogo.png"
@@ -2119,6 +2098,13 @@ Void CheckSettings() {
 		} else {
 			UIManager.UIAll.SendChat("The $<$0f0Ball$> is $<$f80not$> throwable anymore!");
 		}
+	}
+	
+	// Check ball marker visiblity
+	declare Last_RestrictBallMarker for This = S_RestrictBallMarker;
+	if (Last_RestrictBallMarker != S_RestrictBallMarker) {
+		Last_RestrictBallMarker = S_RestrictBallMarker;
+		UpdateHud3dMarkers();
 	}
 	
 	// Check friendly fire setting
@@ -2299,9 +2285,4 @@ Void DoWarmup() {
 	if (MB_UseScriptCallbacks) XmlRpc.SendCallback("EndWarmup", "");
 	
 	MB_Sleep(1000);
-}
-
-// Remove the marker of the given player user
-Void RemoveMarker(CUser _User) {
-	Markers::Minimap_Remove(_User.Login);
 }
