@@ -1,0 +1,126 @@
+/********************************************
+*	Speed Attack (TimeAttack Extension)		*
+*	Author: 	steeffeen					*
+*	Contact:	steeffeen@team-devota.com	*
+********************************************/
+
+#Extends "Modes/ShootMania/TimeAttack.Script.txt"
+
+#Const	SpeedVersion		"2014-04-04"
+#Const	SpeedScriptName		"SpeedAttack.Script.txt"
+
+***LogVersion***
+***
+MB_LogVersion(SpeedScriptName, SpeedVersion);
+***
+
+***StartServer***
+***
+SM::SetupDefaultVisibility();
+
+declare ExtrasLayer <=> UIManager.UILayerCreate();
+ExtrasLayer.ManialinkPage = SA_GetExtrasLayer();
+UIManager.UIAll.UILayers.add(ExtrasLayer);
+***
+
+***StartMap***
+***
+declare netwrite Integer Net_SA_CheckpointCountTotal for Teams[0];
+Net_SA_CheckpointCountTotal = CheckpointTotal;
+***
+
+***PlayLoop***
+***
+SA_CheckSettings();
+
+foreach (Player in Players) {
+	// Update checkpoint count
+	declare CheckpointsTimeLast for Player = Integer[Ident];
+	declare netwrite Integer Net_SA_CheckpointCount for Player;
+	Net_SA_CheckpointCount = CheckpointsTimeLast.count;
+}
+***
+
+Void SA_CheckSettings() {
+	// Check time limit
+	declare Last_SA_TimeLimit for This = S_TimeLimit;
+	if (Last_SA_TimeLimit != S_TimeLimit) {
+		Last_SA_TimeLimit = S_TimeLimit;
+		EndTime = StartTime + (S_TimeLimit * 1000);
+	}
+}
+
+Text SA_GetExtrasLayer() {
+	declare Manialink = """<script><!--
+		#Include "MathLib" as MathLib
+		#Include "TextLib" as TextLib
+		
+		Real GetSpeed(CSmPlayer _Player) {
+			if (_Player == Null) return -1.;
+			if (_Player.SpawnStatus != CSmPlayer::ESpawnStatus::Spawned) return -1.;
+			
+			declare SA_LastPosition for _Player = <0., 0., 0.>;
+			declare Distance = MathLib::Distance(SA_LastPosition, _Player.Position);
+			SA_LastPosition = _Player.Position;
+			
+			declare SA_LastPositionTime for _Player = Now - 100;
+			declare TimeDiff = (Now - SA_LastPositionTime) / 1000.;
+			SA_LastPositionTime = Now;
+			
+			declare Speed = (Distance / TimeDiff) * 3.6 * 100.;
+//			declare Speed = _Player.Speed * 3.6 * 100.;
+			Speed = MathLib::NearestInteger(Speed) / 100.;
+			return Speed;
+		}
+		
+		Integer GetCheckpointCount(CSmPlayer _Player) {
+			if (_Player == Null) return -1;
+			if (_Player.SpawnStatus != CSmPlayer::ESpawnStatus::Spawned) return -1;
+			declare netread Net_SA_CheckpointCount for _Player = -1;
+			return Net_SA_CheckpointCount;
+		}
+		
+		main() {
+			wait(InputPlayer != Null);
+			
+			declare Label_Speed <=> (Page.GetFirstChild("Label_Speed") as CMlLabel);
+			declare Label_Checkpoint <=> (Page.GetFirstChild("Label_Checkpoint") as CMlLabel);
+			
+			declare netread Net_SA_CheckpointCountTotal for Teams[0] = -1;
+			
+			declare LastUIUpdate = 0;
+			
+			while (True) {
+				yield;
+				
+				declare LocalPlayer <=> GUIPlayer;
+				if (LocalPlayer == Null) LocalPlayer <=> InputPlayer;
+				
+				if (LastUIUpdate + 200 > Now) continue;
+				LastUIUpdate = Now;
+				
+				// Speed
+				declare Speed = GetSpeed(LocalPlayer);
+				if (Speed >= 0.) {
+					Label_Speed.Visible = True;
+					Label_Speed.Value = Speed^" km/h";
+				} else {
+					Label_Speed.Visible = False;
+				}
+				
+				// Checkpoint
+				declare CheckpointCount = GetCheckpointCount(LocalPlayer);
+				if (CheckpointCount >= 0) {
+					Label_Checkpoint.Visible = True;
+					Label_Checkpoint.Value = "CP "^CheckpointCount^"/"^Net_SA_CheckpointCountTotal;
+				} else {
+					Label_Checkpoint.Visible = False;
+				}
+			}
+		}
+		--></script>
+		<label id="Label_Speed" posn="106 -72" style="TextButtonMedium" hidden="1" halign="right" valign="center"/>
+		<label id="Label_Checkpoint" posn="42 -72" style="TextButtonMedium" hidden="1" halign="left" valign="center"/>
+""";
+	return Manialink;
+}
