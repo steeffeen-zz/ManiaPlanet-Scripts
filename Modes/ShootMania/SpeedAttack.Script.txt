@@ -58,17 +58,7 @@ Text SA_GetExtrasLayer() {
 		Real GetSpeed(CSmPlayer _Player) {
 			if (_Player == Null) return -1.;
 			if (_Player.SpawnStatus != CSmPlayer::ESpawnStatus::Spawned) return -1.;
-			
-			declare SA_LastPosition for _Player = <0., 0., 0.>;
-			declare Distance = MathLib::Distance(SA_LastPosition, _Player.Position);
-			SA_LastPosition = _Player.Position;
-			
-			declare SA_LastPositionTime for _Player = Now - 100;
-			declare TimeDiff = (Now - SA_LastPositionTime) / 1000.;
-			SA_LastPositionTime = Now;
-			
-			declare Speed = (Distance / TimeDiff) * 3.6 * 100.;
-//			declare Speed = _Player.Speed * 3.6 * 100.;
+			declare Speed = _Player.Speed * 3.6 * 100.;
 			Speed = MathLib::NearestInteger(Speed) / 100.;
 			return Speed;
 		}
@@ -88,7 +78,7 @@ Text SA_GetExtrasLayer() {
 			
 			declare netread Net_SA_CheckpointCountTotal for Teams[0] = -1;
 			
-			declare LastUIUpdate = 0;
+			declare G_LastUIUpdate = 0;
 			
 			while (True) {
 				yield;
@@ -96,8 +86,8 @@ Text SA_GetExtrasLayer() {
 				declare LocalPlayer <=> GUIPlayer;
 				if (LocalPlayer == Null) LocalPlayer <=> InputPlayer;
 				
-				if (LastUIUpdate + 200 > Now) continue;
-				LastUIUpdate = Now;
+				if (G_LastUIUpdate + 200 > Now) continue;
+				G_LastUIUpdate = Now;
 				
 				// Speed
 				declare Speed = GetSpeed(LocalPlayer);
