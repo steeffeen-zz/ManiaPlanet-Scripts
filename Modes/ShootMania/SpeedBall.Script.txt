@@ -7,7 +7,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const	ScriptName			"SpeedBall.Script.txt"
-#Const	Version				"2.3 (2014-05-16)"
+#Const	Version				"2.3 (2014-05-17)"
 #Const	CompatibleMapTypes	"SpeedBallArena,SpeedBallTitleArena"
 
 /*****************************************************
@@ -432,7 +432,7 @@ UIManager.UIAll.SendNotice("",
 	CUIConfig::ENoticeLevel::MatchInfo, Null, CUIConfig::EAvatarVariant::Default,
 	CUIConfig::EUISound::StartRound, 0);
 Victory::RoundBegin();
-//byeLayerMarkers.IsVisible = True;
+LayerMarkers.IsVisible = True;
 LayerExtra.IsVisible = True;
 
 // Initialize values
@@ -886,7 +886,7 @@ EndTime = -1;
 UIManager.UIAll.CountdownEndTime = -1;
 UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
 UpdateNetVariables();
-//byeLayerMarkers.IsVisible = False;
+LayerMarkers.IsVisible = False;
 MB_Sleep(2500);
 
 foreach (BallObjectId in G_BallObjectsIds) {
@@ -1515,6 +1515,7 @@ Void AssignSpawnsGaugesClans() {
 	declare FirstGauge = G_ClanGaugeLandmarkIds[1];
 	G_ClanGaugeLandmarkIds[1] = G_ClanGaugeLandmarkIds[2];
 	G_ClanGaugeLandmarkIds[2] = FirstGauge;
+	
 	// Prepare gauge stuff
 	foreach (Order => GaugeLandmarkId in G_ClanGaugeLandmarkIds) {
 		declare GaugeLandmark <=> MapLandmarks_Gauge[GaugeLandmarkId];
@@ -1529,12 +1530,12 @@ Void AssignSpawnsGaugesClans() {
 			case 0: {
 				if (Order != 3) {
 					GaugeLandmark.Gauge.Clan = Order;
-					GaugeLandmark.Base.Clan = GaugeLandmark.Gauge.Clan;
+					GaugeLandmark.Base.Clan = 3 - GaugeLandmark.Gauge.Clan;
 				}
 			}
 			default: {
 				GaugeLandmark.Gauge.Clan = 3 - GaugeLandmark.Gauge.Clan;
-				GaugeLandmark.Base.Clan = GaugeLandmark.Gauge.Clan;
+				GaugeLandmark.Base.Clan = 3 - GaugeLandmark.Gauge.Clan;
 			}
 		}
 	}
@@ -1558,11 +1559,12 @@ Void UpdateBaseClans() {
 			BallLandmark.Base.Clan = BallObject.Player.CurrentClan;
 			BallLandmark.Gauge.Clan = BallObject.Player.CurrentClan;
 		}
+		
 		// Bases screw things up on some maps - Perform fix if needed
 		if (G_ClanGaugeLandmarkIds.existskey(1) && MapLandmarks_Gauge.existskey(G_ClanGaugeLandmarkIds[1])
 			&& G_ClanGaugeLandmarkIds.existskey(2) && MapLandmarks_Gauge.existskey(G_ClanGaugeLandmarkIds[2])) {
 			if (MapLandmarks_Gauge[G_ClanGaugeLandmarkIds[1]].Base == MapLandmarks_Gauge[G_ClanGaugeLandmarkIds[2]].Base) {
-				// Gauges of the teams share the same base -.-
+				// Gauges of the teams share the same base
 				// Change the clan of the base to the clan currently carrying the ball
 				if (G_ClanGaugeLandmarkIds.existskey(BallObject.Player.CurrentClan)
 					&& MapLandmarks_Gauge.existskey(G_ClanGaugeLandmarkIds[BallObject.Player.CurrentClan])) {
