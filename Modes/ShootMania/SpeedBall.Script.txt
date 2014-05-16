@@ -7,7 +7,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const	ScriptName			"SpeedBall.Script.txt"
-#Const	Version				"2.1.6 (2013-10-27)"
+#Const	Version				"2.3 (2014-05-16)"
 #Const	CompatibleMapTypes	"SpeedBallArena,SpeedBallTitleArena"
 
 /*****************************************************
@@ -21,14 +21,12 @@
 #Include "Libs/Nadeo/TabsServer.Script.txt" as Tabs
 #Include "Libs/Nadeo/Top2.Script.txt" as Top
 #Include "Libs/Nadeo/Victory.Script.txt" as Victory
-#Include "Libs/Nadeo/ShootMania/AFK.Script.txt" as AFK
 #Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
-#Include "Libs/Nadeo/ShootMania/ScoresTable.Script.txt" as ScoresTable
 #Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
 #Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
 #Include "Libs/Nadeo/ShootMania/WarmUp2.Script.txt" as WarmUp2
 #Include "Libs/steeffeen/ShootMania/Bots.Script.txt" as Bots
-#Include "Libs/steeffeen/TeamStats.Script.txt" as TeamStats
+#Include "Libs/steeffeen/TeamStats.Script.txt" as TeamStats 
 #Include "Libs/steeffeen/Tools.Script.txt" as Tools
 
 /*****************************************************
@@ -36,30 +34,31 @@
 *****************************************************/
 
 // Rounds
-#Setting	S_TimeLimitNormal			180		as _("Duration Normal Phase (seconds)")
-#Setting	S_TimeLimitReduction		120		as _("Duration Reduction Phase (seconds)")
-#Setting	S_TimeLimitInstant			300		as _("Duration Instant Phase (seconds)")
-#Setting	S_RoundsToWin				5		as _("Rounds to win a map")
-#Setting	S_RoundGapToWin				2		as _("Rounds gap to win a map")
-#Setting	S_RoundsLimit				10		as _("Total rounds limit per map (First team reaching X wins)")
-#Setting	S_BestOfXMatch				0		as _("Play best-of-X-maps match")
-#Setting	S_UseWarmUp					False	as _("Start a warmup before each map")
+#Setting	S_TimeLimitNormal			180		as _("Duration Normal Phase (Seconds)")
+#Setting	S_TimeLimitReduction		120		as _("Duration Reduction Phase (Seconds)")
+#Setting	S_TimeLimitInstant			300		as _("Duration Instant Phase (Seconds)")
+#Setting	S_RoundsToWin				5		as _("Rounds to win a Map")
+#Setting	S_RoundGapToWin				2		as _("Rounds Gap to win a Map")
+#Setting	S_RoundsLimit				10		as _("Total Rounds Limit per Map (First Team reaching X wins)")
+#Setting	S_BestOfXMatch				0		as _("Play Best-of-X-Maps Match")
+#Setting	S_UseWarmUp					False	as _("Start a Warmup before each Map")
 // Teams
-#Setting	S_UsePlayerClublinks		False	as _("Enable use of player clublinks (needs restart vote)")
-#Setting	S_AutoTeamBalance			False	as _("Automatically balance teams before each map")
+#Setting	S_UsePlayerClublinks		False	as _("Enable use of Player Clublinks (needs Restart Vote)")
+#Setting	S_AutoTeamBalance			False	as _("Automatically balance Teams before each Map")
 // Gameplay
-#Setting	S_FriendlyFire				False	as _("Friendly fire (Damage team members)")
+#Setting	S_FriendlyFire				False	as _("Friendly Fire (Team Damage)")
 #Setting	S_Mode						0		as _("Gameplay Mode (0: Normal, 1: Laser, 2: Random Weapon)")
 #Setting	S_ThrowableBall				False	as _("Use a throwable Ball")
+#Setting	S_RestrictBallMarker		False	as _("Restrict Ball Marker Visibility")
 
 // Hidden
 #Setting	S_DefaultCaptureTime		1.6		as "<hidden>"		// Default (not-reduced) capture time
-#Setting	S_ManageAFKPlayers			True	as "<hidden>"		// Forces afk players into spec
 #Setting	S_WarmUpDuration			60		as "<hidden>"		// WarmUp duration
 #Setting	S_BotPower					10.		as "<hidden>"		// Power of the bots
 #Setting	S_NbBotsBlue				0		as "<hidden>"		// Number of bots of team blue
 #Setting	S_NbBotsRed					0		as "<hidden>"		// Number of bots of team red
 #Setting	S_ReduceLaserDamage			False	as "<hidden>"		// Reduce laser damage?
+#Setting	S_ChangeBallWeaponVisual	False	as "<hidden>"		// Reduce laser damage?
 
 /*****************************************************
 	COMMANDS
@@ -88,6 +87,9 @@
 #Const	C_MissMessageMaxDist			0.9			// Maximum distance for near miss messages
 #Const	C_HitMessageMinDist				40.			// Minimum distance for hit missage
 #Const	C_NbTeamHitMessage				8			// Times the team hit warning appears (0: deactivated, -1: endless)
+// ScoresTable
+#Const	C_ST_ColId_Damage				"SB.Damage"
+#Const	C_ST_ColId_Passes				"SB.Passes"
 
 #Const	Description			_("$<$oObjective:$> Two teams fight for control of a $<$0f0Ball$> in order to capture the opponents goal post.")
 
@@ -118,11 +120,10 @@ declare	Integer					G_Phase;					// Current gameplay phase (0: normal, 1: reduct
 declare	Ident					G_BallItemId;				// Id of ball item
 declare Ident[]					G_BallObjectsIds;			// Ids of all ball objects
 declare	Integer					G_LastUIUpdate;				// Time when the last UI refresh was performed
-declare	Ident					G_BallPoleId;				// Id of the ball pole
-declare	Ident[Integer][Integer]	G_ClanSpawnIDs;				// BlockSpawn IDs of each clan
+declare	Ident					G_BallLandmarkId;			// Id of the ball landmark
+declare	Ident[Integer][Integer]	G_ClanSpawnLandmarkIds;		// Spawn Landmark Ids of each clan
 declare	Integer[Integer]		G_LastSpawnIndex;			// Last spawn index of each clan
-declare	Ident[Integer]			G_ClanPoleIDs;				// BlockPole IDs of each clan
-declare	Integer					G_LastAfkHandling;			// Time of last afk players handling
+declare	Ident[Integer]			G_ClanGaugeLandmarkIds;		// Gauge Landmark Ids of each clan
 declare Real[Integer]			G_MaxCapturePercentage;		// Maximum capture percentage reached by each team during the current round
 
 /*****************************************************
@@ -132,11 +133,9 @@ declare Real[Integer]			G_MaxCapturePercentage;		// Maximum capture percentage r
 ***LogVersion***
 ***
 MB_LogVersion(ScriptName, Version);
-MB_LogVersion(AFK::GetScriptName(), AFK::GetScriptVersion());
 MB_LogVersion(Interface::GetScriptName(), Interface::GetScriptVersion());
 MB_LogVersion(Message::GetScriptName(), Message::GetScriptVersion());
 MB_LogVersion(Score::GetScriptName(), Score::GetScriptVersion());
-MB_LogVersion(ScoresTable::GetScriptName(), ScoresTable::GetScriptVersion());
 MB_LogVersion(SM::GetScriptName(), SM::GetScriptVersion());
 MB_LogVersion(SpawnScreen::GetScriptName(), SpawnScreen::GetScriptVersion());
 MB_LogVersion(Tabs::GetScriptName(), Tabs::GetScriptVersion());
@@ -165,40 +164,20 @@ declare OpenSettingText = "$<$f80";
 declare OpenNumText = "$<$o";
 declare CloseText = "$>";
 declare BallText = OpenBallText^"Ball"^CloseText;
-/*
-declare ModeRules = TextLib::Compose(
-	"- %1\n- %2\n- %3\n- %4",
-	TextLib::Compose(_("Two teams fight for control of the %1Ball%2 in order to capture the opponents goal post."),
-		OpenBallText, CloseText),
-	TextLib::Compose(_("Grab the %1Ball%2 and get it to the enemys goalpost to score (which takes %3 seconds)."),
-		OpenBallText, CloseText, OpenSettingText^S_DefaultCaptureTime^CloseText),
-	TextLib::Compose(_("Once you have the %1Ball%2, it slowly regenerates your armor while carrying, hit another player to %3pass%2 the %1Ball%2."),
-		OpenBallText, CloseText, "$<$3af"),
-	TextLib::Compose(_("If the %1Ball%2 carrier dies, the %1Ball%2 will drop at his position. It can be picked up by any player on any team for %3 seconds before it resets."),
-		OpenBallText, CloseText, OpenSettingText^(C_DroppedBallResetTime / 1000.)^CloseText));
-ModeRules = TextLib::Compose("%1\n\n- %2\n- %3\n- %4\n- %5",
-	TextLib::Compose(_("%1Normal Phase:%2 Lasts %3 minutes. Normal capture time."),
-		OpenNumText^"1. ", CloseText, OpenSettingText^(S_TimeLimitNormal / 60.)^CloseText),
-	TextLib::Compose(_("%1Reduction Phase:%2 Lasts %3 minutes. The capture time constantly decreases."),
-		OpenNumText^"2. ", CloseText, OpenSettingText^(S_TimeLimitReduction / 60.)^CloseText),
-	TextLib::Compose(_("%1Instant Phase:%2 The last %3 minutes are running! Captures are instant!"),
-		OpenNumText^"3. ", CloseText, OpenSettingText^(S_TimeLimitInstant / 60.)^CloseText),
-	TextLib::Compose(_("If neither team manages to score the on that has reached the highest capture percentage wins.")));
-*/
-declare ModeRules = "- Two teams fight for control of the "^BallText^" in order to capture the opponents goal post.\n- Grab the "^BallText^" and get it to the enemy's pole to score (which takes "^OpenSettingText^S_DefaultCaptureTime^CloseText^" seconds).\n- Once you have the "^BallText^" it slowly regenerates your armor, hit another player to $<$3afpass$> it.\n- If the "^BallText^" carrier dies, the "^BallText^" will drop at his position. It can be picked up by any player on any team for "^OpenSettingText^(C_DroppedBallResetTime / 1000.)^CloseText^" seconds before it resets.";
-ModeRules ^= "\n\n- "^OpenNumText^"1. Normal Phase:"^CloseText^" Lasts "^OpenSettingText^(S_TimeLimitNormal / 60.)^CloseText^" minutes. Normal capture time.\n- "^OpenNumText^"2. Reduction Phase:"^CloseText^" Lasts "^OpenSettingText^(S_TimeLimitReduction / 60.)^CloseText^" minutes. The capture time constantly decreases.\n- "^OpenNumText^"3. Instant Phase:"^CloseText^" The last "^OpenSettingText^(S_TimeLimitInstant / 60.)^CloseText^" minutes are running! Captures are instant!\n- If neither team manages to score the one that has reached the highest capture percentage wins.";
+declare ModeRules = "- Two Teams fight for Control of the "^BallText^" in order to capture the Opponents Goal post.\n- Grab the "^BallText^" and get it to the Enemy's Pole to score (which takes "^OpenSettingText^S_DefaultCaptureTime^CloseText^" Seconds).\n- Once You have the "^BallText^" it slowly regenerates Your Armor, hit another Player to $<$3afpass$> it.\n- If the "^BallText^" Carrier dies, the "^BallText^" will drop at his Position. It can be picked up by any Player on any Team for "^OpenSettingText^(C_DroppedBallResetTime / 1000.)^CloseText^" Seconds before it resets.";
+ModeRules ^= "\n\n- "^OpenNumText^"1. Normal Phase:"^CloseText^" Lasts "^OpenSettingText^(S_TimeLimitNormal / 60.)^CloseText^" Minutes. Normal Capture Time.\n- "^OpenNumText^"2. Reduction Phase:"^CloseText^" Lasts "^OpenSettingText^(S_TimeLimitReduction / 60.)^CloseText^" minutes. The Capture Time constantly decreases.\n- "^OpenNumText^"3. Instant Phase:"^CloseText^" The last "^OpenSettingText^(S_TimeLimitInstant / 60.)^CloseText^" Minutes are running! Captures are instant!\n- If neither Team manages to score the One that has reached the highest Capture Percentage wins.";
 
 SpawnScreen::AddSubsection(_("Rules"), ModeRules, 0.);
 if (S_FriendlyFire) {
-	SpawnScreen::AddSubsection(TextLib::Compose(_("%1Friendly%2 Fire activated!"), "$<$f80", "$>"), _("Pay attention to not damage your team mates!"),
+	SpawnScreen::AddSubsection(TextLib::Compose(_("%1Friendly%2 Fire activated!"), "$<$f80", "$>"), _("Pay Attention to not damage your Team Mates!"),
 		90.);
 }
 switch (S_Mode) {
 	case 1: {
-		SpawnScreen::AddSubsection(TextLib::Compose(_("%1Laser Mode%2 activated!"), "$<$f80", "$>"), _("Players spawn with lasers!"), 110.);
+		SpawnScreen::AddSubsection(TextLib::Compose(_("%1Laser Mode%2 activated!"), "$<$f80", "$>"), _("Players spawn with Lasers!"), 110.);
 	}
 	case 2: {
-		SpawnScreen::AddSubsection(TextLib::Compose(_("%1Random Mode%2 activated!"), "$<$f80", "$>"), _("Players spawn with random weapons!"), 110.);
+		SpawnScreen::AddSubsection(TextLib::Compose(_("%1Random Mode%2 activated!"), "$<$f80", "$>"), _("Players spawn with Random Weapons!"), 110.);
 	}
 }
 SpawnScreen::CreatePrettyRules("SpeedBall");
@@ -230,7 +209,6 @@ StartTime = -1;
 EndTime = -1;
 UIManager.UIAll.CountdownEndTime = -1;
 G_LastUIUpdate = 0;
-G_LastAfkHandling = 0;
 G_MaxCapturePercentage = [1 => -1., 2 => -1.];
 
 // UI
@@ -270,61 +248,74 @@ TabsLayer.Type = CUILayer::EUILayerType::AltMenu;
 UIManager.UIAll.UILayers.add(TabsLayer);
 
 // ScoresTable
-ScoresTable::Load();
-ScoresTable::SetTableWidth(218.);
-ScoresTable::SetTableFormat(2, 6);
-ScoresTable::SetTableBackgroundLeftRightImage(C_ImgBaseDir^"scoresBg.dds", C_ImgBaseDir^"scoresBg_left.dds", C_ImgBaseDir^"scoresBg_right.dds",
-	"", "", 90, 50, 50, <0.05, 54.>, <237., 176.8>);
-ScoresTable::SetColumnsWidth(1.7, 1.2, 3., 16., 1.4, 1.4, 0.1, 2.5, 2.5, 2.5, 3.2);
-ScoresTable::SetDisplayTeamScore(True);
-ScoresTable::SetColumnName("Custom2", _("|Amount of damage inflicted|Dmg"));
-ScoresTable::SetColumnName("Custom3", _("|Number of passes done|Passes"));
-ScoresTable::SetColumnName("RoundPoints", _("|A round of the match|Round"));
-ScoresTable::SetColumnName("Points", TextLib::Compose("%1 ", _("|Total number of points|Total")));
-ScoresTable::SetRoundScoreFormat("$s$0d0");
-ScoresTable::SetDefaultFooterStats(TextLib::Compose(_("Rounds to win: %1 (Limit: %2)"), TextLib::ToText(S_RoundsToWin), TextLib::ToText(S_RoundsLimit)));
-ScoresTable::Build();
+ST2::SetStyle("LibST_SMBaseTeams");
+ST2::SetStyle("LibST_SMBasePoints");
+ST2::SetStyle("LibST_SMWithLegends");
+ST2::SetFormat(2, 6);
+ST2::SetSizeRatio(<1.14, 1.>);
+ST2::SetTeamsScoresVisibility(True);
+ST2::CreateCol(C_ST_ColId_Damage, _("|Number of passes done|Passes"), "-", 2.8, 80.);
+ST2::SetColScript(C_ST_ColId_Damage, """
+	declare netread Net_Damage for _Score = -1;
+	if (Net_Damage > 0) {
+		Label_Col.Value = TL::ToText(Net_Damage);
+	} else {
+		Label_Col.Value = "";
+	}
+""");
+ST2::CreateCol(C_ST_ColId_Passes, _("|Amount of damage inflicted|Dmg"), "-", 2.8, 90.);
+ST2::SetColScript(C_ST_ColId_Passes, """
+	declare netread Net_Passes for _Score = -1;
+	if (Net_Passes > 0) {
+		Label_Col.Value = TL::ToText(Net_Passes);
+	} else {
+		Label_Col.Value = "";
+	}
+""");
+ST2::SetColLegend("LibST_SMRoundPoints", _("|Amount of points in the current round of the match|Round"));
+ST2::SetColLegend("LibST_SMPoints", _("|Total amount of points in the match|Total"));
+ST2::Build("SM");
 
 {
-// Tops
-Top::Load();
-Top::SetLayerType(CUILayer::EUILayerType::AltMenu);
-declare TopWidth = 72.;
-Top::SetTopWidth(TopWidth);
-Top::SetColor("Background", "0002");
-Top::SetCommonBackgroundImage(C_ImgBaseDir^"topsBg.dds", <0., 96.5>, <237., 177.5>);
-declare Tops = [	T_Damage		=> _("Top Damage"),
-					T_BallHitters	=> _("Top BallHitters"),
-					T_Passes		=> _("Top Passes"),
-					T_Captures		=> _("Top Captures"),
-					T_CaptureTotal	=> _("Top Capture% Sum"),
-					T_BackStabber	=> _("Flop BackStabber")];
-declare Count = 1;
-declare Line = 0;
-foreach (Key => Name in Tops) {
-	Top::Create(Key, Name, 7 - Line, <-146.6 + Count * (TopWidth + 1.1), 41. - Line * 48.2>);
-	Count += 1;
-	if (Count == 4) {
-		Count = 1;
-		Line += 1;
+	// Tops
+	Top::Load();
+	Top::SetLayerType(CUILayer::EUILayerType::AltMenu);
+	declare TopWidth = 72.;
+	Top::SetTopWidth(TopWidth);
+	Top::SetColor("Background", "0002");
+	Top::SetCommonBackgroundImage(C_ImgBaseDir^"topsBg.dds", <0., 96.5>, <237., 177.5>);
+	declare Tops = [	T_Damage		=> _("Top Damage"),
+						T_BallHitters	=> _("Top BallHitters"),
+						T_Passes		=> _("Top Passes"),
+						T_Captures		=> _("Top Captures"),
+						T_CaptureTotal	=> _("Top Capture% Sum"),
+						T_BackStabber	=> _("Flop BackStabber")];
+	declare Count = 1;
+	declare Line = 0;
+	foreach (Key => Name in Tops) {
+		Top::Create(Key, Name, 7 - Line, <-146.6 + Count * (TopWidth + 1.1), 41. - Line * 48.2>);
+		Count += 1;
+		if (Count == 4) {
+			Count = 1;
+			Line += 1;
+		}
 	}
-}
-
-// Team Stats
-TeamStats::Load("TeamStatsTab");
-TeamStats::SetBackgroundImage(C_ImgBaseDir^"topsBg.dds", <237., 177.5>, <0., 7.8>);
-declare Stats =	[	T_BallPoss		=> _("Ball Possession"),
-					T_Damage		=> _("Damage"),
-					T_Passes		=> _("Passes"),
-					T_CaptureTries	=> _("Capturing Tries"),
-					T_EnemyKills	=> _("Enemy Eliminations"),
-					T_TeamKills		=> _("Friend Eliminations")];
-Count = 0;
-foreach (Key => Name in Stats) {
-	TeamStats::CreateStat(Key, Name, "-", 14 - 10. * Count);
-	Count += 1;
-}
-TeamStats::BuildManialink();
+	
+	// Team Stats
+	TeamStats::Load("TeamStatsTab");
+	TeamStats::SetBackgroundImage(C_ImgBaseDir^"topsBg.dds", <237., 177.5>, <0., 7.8>);
+	declare Stats =	[	T_BallPoss		=> _("Ball Possession"),
+						T_Damage		=> _("Damage"),
+						T_Passes		=> _("Passes"),
+						T_CaptureTries	=> _("Capturing Tries"),
+						T_EnemyKills	=> _("Enemy Eliminations"),
+						T_TeamKills		=> _("Friend Eliminations")];
+	Count = 0;
+	foreach (Key => Name in Stats) {
+		TeamStats::CreateStat(Key, Name, "-", 14 - 10. * Count);
+		Count += 1;
+	}
+	TeamStats::BuildManialink();
 }
 ***
 
@@ -369,7 +360,6 @@ if (S_AutoTeamBalance) {
 
 // Prepare match
 Score::MatchBegin();
-ScoresTable::StartMatch();
 Victory::MatchBegin();
 Top::ResetAll();
 ResetMatchTops();
@@ -379,32 +369,32 @@ ClanScores[1] = 0;
 ClanScores[2] = 0;
 
 // Prepare map
-G_ClanSpawnIDs[1] = Ident[Integer];
-G_ClanSpawnIDs[2] = Ident[Integer];
-G_ClanPoleIDs.clear();
-G_BallPoleId = NullId;
-foreach (Base in Bases) {
+G_ClanSpawnLandmarkIds[1] = Ident[Integer];
+G_ClanSpawnLandmarkIds[2] = Ident[Integer];
+G_ClanGaugeLandmarkIds.clear();
+G_BallLandmarkId = NullId;
+foreach (Base in MapBases) {
 	Base.IsActive = True;
 	Base.Clan = 0;
 }
-foreach (Index => Spawn in BlockSpawns) {
-	if (Spawn.Tag != "Spawn") continue;
-	G_ClanSpawnIDs[Spawn.Order][G_ClanSpawnIDs[Spawn.Order].count] = Spawn.Id;
+foreach (SpawnLandmark in MapLandmarks_PlayerSpawn) {
+	if (SpawnLandmark.Tag != "Spawn") continue;
+	G_ClanSpawnLandmarkIds[SpawnLandmark.Order][G_ClanSpawnLandmarkIds[SpawnLandmark.Order].count] = SpawnLandmark.Id;
 }
-foreach (Index => Pole in BlockPoles) {
-	if (Pole.Tag != "Goal") continue;
-	switch (Pole.Order) {
+foreach (Index => GaugeLandmark in MapLandmarks_Gauge) {
+	if (GaugeLandmark.Tag != "Goal") continue;
+	switch (GaugeLandmark.Order) {
 		case 3: {
 			// Ball spawn
-			G_BallPoleId = Pole.Id;
-			Pole.Gauge.ValueReal = 1.;
-			declare netwrite Integer Net_BallPoleIndex for Teams[0];
-			Net_BallPoleIndex = Index;
-			Bots::SetAnchorPoint(Pole.Position);
+			G_BallLandmarkId = GaugeLandmark.Id;
+			GaugeLandmark.Gauge.ValueReal = 1.;
+			declare netwrite Integer Net_BallLandmarkIndex for Teams[0];
+			Net_BallLandmarkIndex = Index;
+			Bots::SetAnchorPoint(GaugeLandmark.Position);
 		}
 		default: {
-			G_ClanPoleIDs[3 - Pole.Order] = Pole.Id;
-			Pole.Gauge.Max = MathLib::NearestInteger(S_DefaultCaptureTime * 1000.);
+			G_ClanGaugeLandmarkIds[3 - GaugeLandmark.Order] = GaugeLandmark.Id;
+			GaugeLandmark.Gauge.Max = MathLib::NearestInteger(S_DefaultCaptureTime * 1000.);
 		}
 	}
 }
@@ -437,19 +427,19 @@ UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
 UIManager.UIAll.SpectatorForcedTarget = NullId;
 Score::RoundBegin();
 ResetRoundTops();
-AssignSpawnPoleClans();
+AssignSpawnsGaugesClans();
 UIManager.UIAll.SendNotice("",
 	CUIConfig::ENoticeLevel::MatchInfo, Null, CUIConfig::EAvatarVariant::Default,
 	CUIConfig::EUISound::StartRound, 0);
 Victory::RoundBegin();
-LayerMarkers.IsVisible = True;
+//byeLayerMarkers.IsVisible = True;
 LayerExtra.IsVisible = True;
 
 // Initialize values
 foreach (BallObjectId in G_BallObjectsIds) {
 	if (!Objects.existskey(BallObjectId)) continue;
 	declare BallObject <=> Objects[BallObjectId];
-	BallObject.SetPositionAndVel(BlockPoles[G_BallPoleId].Position, <0., 1., 0.>);
+	BallObject.SetPositionAndVel(MapLandmarks_Gauge[G_BallLandmarkId].Position, <0., 1., 0.>);
 	declare Integer DropTime for BallObject;
 	DropTime = -1;
 	declare Boolean AtHome for BallObject;
@@ -460,7 +450,7 @@ UpdateBaseClans();
 G_MaxCapturePercentage = [1 => 0., 2 => 0.];
 
 // Update markers
-UpdateHud3dMarkers(False);
+UpdateHud3dMarkers();
 
 // Set round times
 StartTime = Now + 4000;
@@ -473,11 +463,11 @@ UpdateClanScoresSummary(True);
 UpdateNetVariables();
 ---ModeStatusMessage---
 Bots::SetNbBots(S_NbBotsBlue, S_NbBotsRed);
+UseBeaconsWithRecipients = True;
 ***
 
 ***OnNewPlayer***
 ***
-ScoresTable::RestoreCustomScores(Player);
 declare UI <=> UIManager.GetUI(Player);
 if (UI == Null) continue;
 Tabs::UseTabs(UI, "ScoresTab");
@@ -485,7 +475,6 @@ Tabs::UseTabs(UI, "ScoresTab");
 
 ***OnNewSpectator***
 ***
-ScoresTable::RestoreCustomScores(Spectator);
 declare UI <=> UIManager.GetUI(Spectator);
 if (UI == Null) continue;
 Tabs::UseTabs(UI, "ScoresTab");
@@ -504,12 +493,6 @@ Bots::Loop();
 // Check anti block
 if (!UsePvPCollisions && StartTime + C_ExtendedAntiBlockTime < Now) {
 	UsePvPCollisions = True;
-}
-
-// Handle afk players
-if (S_ManageAFKPlayers && G_LastAfkHandling + 30000 < Now) {
-	G_LastAfkHandling = Now;
-	AFK::ManageAFKPlayers();
 }
 
 // Check for changed settings
@@ -535,7 +518,7 @@ foreach (Player in Players) {
 					// Ball carrier!
 					Player.EnergyLevel = 1.;
 					Player.ArmorReplenishGain = C_BallCarrierArmorReplenishGain;
-					Player.UseAlternateWeaponVisual = True;
+					Player.UseAlternateWeaponVisual = S_ChangeBallWeaponVisual;
 				} else {
 					// Usual player (without ball)
 					Player.EnergyLevel = C_PlayerHighlightValue;
@@ -643,36 +626,36 @@ foreach (Event in PendingEvents) {
 			}
 		}
 		case CSmModeEvent::EType::OnCapture: {
-			if (Event.BlockPole == Null || !G_ClanPoleIDs.exists(Event.BlockPole.Id)) {
+			if (Event.Landmark == Null || Event.Landmark.Gauge == Null || !G_ClanGaugeLandmarkIds.exists(Event.Landmark.Id)) {
+				Discard(Event);
+				continue;
+			}
+			declare CSmObject BallObject <=> Null;
+			foreach (BallObjectId in G_BallObjectsIds) {
+				if (!Objects.existskey(BallObjectId)) continue;
+				declare CurrentBallObject <=> Objects[BallObjectId];
+				if (CurrentBallObject.Player == Null || CurrentBallObject.Player.CapturedLandmark != Event.Landmark) continue;
+				if (CurrentBallObject.Player.CurrentClan != Event.Landmark.Gauge.Clan) continue;
+				BallObject = CurrentBallObject;
+			}
+			if (BallObject == Null) {
 				Discard(Event);
 			} else {
-				declare CSmObject BallObject <=> Null;
-				foreach (BallObjectId in G_BallObjectsIds) {
-					if (!Objects.existskey(BallObjectId)) continue;
-					declare CurrentBallObject <=> Objects[BallObjectId];
-					if (CurrentBallObject.Player == Null || CurrentBallObject.Player.BlockPole != Event.BlockPole) continue;
-					if (CurrentBallObject.Player.CurrentClan != Event.BlockPole.Gauge.Clan) continue;
-					BallObject = CurrentBallObject;
+				// Captured! - Announce winner etc.
+				Victory::SetRoundWinnerIfNoWinner(Event.Landmark.Gauge.Clan);
+				UIManager.UIAll.SpectatorForcedTarget = Event.Landmark.Id;
+				UIManager.UIAll.BigMessage = "";
+				// Reward ball carrier
+				AddPoints(BallObject.Player, 5);
+				UpdateCaptures(BallObject.Player, 1);
+				if (!BallObject.Player.IsFakePlayer) {
+					XmlRpc.SendCallback("poleCapture", BallObject.Player.Login);
 				}
-				if (BallObject == Null) {
-					Discard(Event);
-				} else {
-					// Captured! - Announce winner etc.
-					Victory::SetRoundWinnerIfNoWinner(Event.BlockPole.Gauge.Clan);
-					UIManager.UIAll.SpectatorForcedTarget = Event.BlockPole.Id;
-					UIManager.UIAll.BigMessage = "";
-					// Reward ball carrier
-					AddPoints(BallObject.Player, 5);
-					UpdateCaptures(BallObject.Player, 1);
-					if (!BallObject.Player.IsFakePlayer) {
-						XmlRpc.SendCallback("poleCapture", BallObject.Player.Login);
-					}
-					UIManager.UIAll.SendNotice(TextLib::Compose(_("%1 scores for %2!"),
-						GetColorizedPlayerName(BallObject.Player), "$<"^Teams[BallObject.Player.CurrentClan-1].ColorizedName^"$>"),
-						CUIConfig::ENoticeLevel::MatchInfo, Null, CUIConfig::EAvatarVariant::Default,
-						CUIConfig::EUISound::Capture, 0);
-					PassOn(Event);
-				}
+				UIManager.UIAll.SendNotice(TextLib::Compose(_("%1 scores for %2!"),
+					GetColorizedPlayerName(BallObject.Player), "$<"^Teams[BallObject.Player.CurrentClan-1].ColorizedName^"$>"),
+					CUIConfig::ENoticeLevel::MatchInfo, Null, CUIConfig::EAvatarVariant::Default,
+					CUIConfig::EUISound::Capture, 0);
+				PassOn(Event);
 			}
 		}
 		case CSmModeEvent::EType::OnShoot: {
@@ -717,8 +700,6 @@ foreach (Event in PendingEvents) {
 				declare Integer DropTime for Event.Object;
 				DropTime = Now + 3000;
 				PassOn(Event);
-				
-				UpdateHud3dMarkers(True);
 			}
 		}
 		case CSmModeEvent::EType::OnCommand: {
@@ -767,45 +748,45 @@ foreach (Event in PendingEvents) {
 Top::Loop();
 
 // Check for captures
-foreach (Pole in BlockPoles) {
+foreach (GaugeLandmark in MapLandmarks_Gauge) {
 	// Team Goals
-	if (G_ClanPoleIDs.exists(Pole.Id)) {
-		if (Victory::NoRoundWinner()) {
-			Pole.Gauge.Speed = MathLib::NearestInteger(S_DefaultCaptureTime * -1000.);
-		}
-		declare BallAtPole = False;
-		declare CaptureTime = GetCaptureTime();
-		foreach (BallObjectId in G_BallObjectsIds) {
-			if (!Objects.existskey(BallObjectId)) continue;
-			declare BallObject <=> Objects[BallObjectId];
-			if (BallObject.Player == Null) continue;
-			if (Pole.Sector.PlayersIds.exists(BallObject.Player.Id) && Pole.Id == G_ClanPoleIDs[BallObject.Player.CurrentClan]) {
-				Pole.Gauge.Speed = 1;
-				if (Pole.Gauge.ValueReal < 1.) {
-					UpdateCaptureTotal(BallObject.Player, Period);
-					if (Pole.Gauge.ValueReal == 0.) {
-						UpdateStatCaptureTries(Pole.Gauge.Clan - 1, 1);
-					}
-					if (CaptureTime <= 1) {
-						Pole.Gauge.ValueReal = 1.;
-					}
+	if (!G_ClanGaugeLandmarkIds.exists(GaugeLandmark.Id)) continue;
+	if (Victory::NoRoundWinner()) {
+		GaugeLandmark.Gauge.Speed = MathLib::NearestInteger(S_DefaultCaptureTime * -1000.);
+	}
+	declare BallAtLandmark = False;
+	declare CaptureTime = GetCaptureTime();
+	foreach (BallObjectId in G_BallObjectsIds) {
+		if (!Objects.existskey(BallObjectId)) continue;
+		declare BallObject <=> Objects[BallObjectId];
+		if (BallObject.Player == Null) continue;
+		if (GaugeLandmark.Sector.PlayersIds.exists(BallObject.Player.Id) && GaugeLandmark.Id == G_ClanGaugeLandmarkIds[BallObject.Player.CurrentClan]) {
+			GaugeLandmark.Gauge.Speed = 1;
+			if (GaugeLandmark.Gauge.ValueReal < 1.) {
+				UpdateCaptureTotal(BallObject.Player, Period);
+				if (GaugeLandmark.Gauge.ValueReal == 0.) {
+					UpdateStatCaptureTries(GaugeLandmark.Gauge.Clan - 1, 1);
 				}
-				if (G_MaxCapturePercentage.existskey(Pole.Gauge.Clan) && G_MaxCapturePercentage[Pole.Gauge.Clan] < Pole.Gauge.ValueReal) {
-					G_MaxCapturePercentage[Pole.Gauge.Clan] = Pole.Gauge.ValueReal;
-					UpdateClanScoresSummary(False);
+				if (CaptureTime <= 1) {
+					GaugeLandmark.Gauge.ValueReal = 1.;
 				}
-				BallAtPole = True;
 			}
-		}
-		if (!BallAtPole) {
-			// Prevent weird bug causing the pole stay fully captured without an OnCapture event
-			if (!Pole.Captured && Pole.Gauge.ValueReal >= 1. && Now < EndTime) {
-				Pole.Gauge.ValueReal = 0.99;
+			if (G_MaxCapturePercentage.existskey(GaugeLandmark.Gauge.Clan)
+				&& G_MaxCapturePercentage[GaugeLandmark.Gauge.Clan] < GaugeLandmark.Gauge.ValueReal) {
+				G_MaxCapturePercentage[GaugeLandmark.Gauge.Clan] = GaugeLandmark.Gauge.ValueReal;
+				UpdateClanScoresSummary(False);
 			}
+			BallAtLandmark = True;
 		}
-		if (Pole.Gauge.ValueReal <= 0.) {
-			Pole.Gauge.Max = CaptureTime;
+	}
+	if (!BallAtLandmark) {
+		// Prevent weird bug causing the gauge stay fully captured without an OnCapture event
+		if (!GaugeLandmark.Gauge.Captured && GaugeLandmark.Gauge.ValueReal >= 1. && Now < EndTime) {
+			GaugeLandmark.Gauge.ValueReal = 0.99;
 		}
+	}
+	if (GaugeLandmark.Gauge.ValueReal <= 0.) {
+		GaugeLandmark.Gauge.Max = CaptureTime;
 	}
 }
 
@@ -905,7 +886,7 @@ EndTime = -1;
 UIManager.UIAll.CountdownEndTime = -1;
 UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
 UpdateNetVariables();
-LayerMarkers.IsVisible = False;
+//byeLayerMarkers.IsVisible = False;
 MB_Sleep(2500);
 
 foreach (BallObjectId in G_BallObjectsIds) {
@@ -966,7 +947,6 @@ Victory::RoundEnd();
 ***EndMap***
 ***
 Score::MatchEnd();
-ScoresTable::EndMatch();
 Victory::MatchEnd();
 
 // Destroy objects
@@ -1028,7 +1008,6 @@ if (S_BestOfXMatch > 0 && G_ClanMapScores[1] + G_ClanMapScores[2] >= S_BestOfXMa
 ***EndServer***
 ***
 // UI Cleanup
-ScoresTable::Unload();
 Top::Unload();
 TeamStats::Unload();
 Interface::DestroyRank();
@@ -1086,38 +1065,33 @@ Text GetColorizedPlayerName(CSmPlayer _Player) {
 
 // Update hud3dmarkers
 // None, Never, Always, WhenInFrustum, WhenVisible, WhenInMiddleOfScreen
-Void UpdateHud3dMarkers(Boolean _UseObjectId) {
-	declare Markers = "";
+Void UpdateHud3dMarkers() {
+	declare MarkersXml = "";
+	
+	// Set restriction
+	declare netwrite Boolean Net_RestrictBallMarker for Teams[0];
+//	declare netwrite Boolean Net_RestrictBallMarker for UIManager.UIAll;
+	Net_RestrictBallMarker = S_RestrictBallMarker;
 
 	// Ball marker
 	foreach (Index => BallObjectId in G_BallObjectsIds) {
 		if (!Objects.existskey(BallObjectId)) continue;
 		declare BallObject <=> Objects[BallObjectId];
-		if (_UseObjectId) {
-			Markers ^= """<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarker{{{Index}}}" box="0 1.2 0"/>
-				<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarkerHelp{{{Index}}}"
-					visibility="WhenInMiddleOfScreen" box="0 1.2 0"/>""";
-		} else if (BallObject.Player != Null) {
-			Markers ^= """<marker playerlogin="{{{BallObject.Player.Login}}}" manialinkframeid="Frame_BallMarker{{{Index}}}" box="0 1.2 0"/>
-				<marker playerlogin="{{{BallObject.Player.Login}}}" manialinkframeid="Frame_BallMarkerHelp{{{Index}}}"
-					visibility="WhenInMiddleOfScreen" box="0 1.2 0"/>""";
-		} else {
-			Markers ^= """<marker pos="{{{Tools::GetPosn(BallObject.Position)}}}" manialinkframeid="Frame_BallMarker{{{Index}}}" box="0 1.2 0"/>
-				<marker pos="{{{Tools::GetPosn(BallObject.Position)}}}" manialinkframeid="Frame_BallMarkerHelp{{{Index}}}"
-					visibility="WhenInMiddleOfScreen" box="0 1.2 0"/>""";
-		}
+		MarkersXml ^= """<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarker{{{Index}}}" box="0 1.2 0"/>
+			<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarkerHelp{{{Index}}}"
+				visibility="WhenVisible" box="0 1.2 0"/>""";
 	}
 	
-	// Pole markers
-	foreach (Pole in BlockPoles) {
-		if (Pole.Tag != "Goal") continue;
-		if (Pole.Order == 1 || Pole.Order == 2) {
-			Markers ^= """<marker manialinkframeid="Frame_PoleMarker{{{Pole.Order}}}" box="0 6.5 0" visibility="WhenInFrustum"
-				pos="{{{Pole.Position[0]}}} {{{Pole.Position[1]}}} {{{Pole.Position[2]}}}"/>""";
+	// Gauge markers
+	foreach (Landmark in MapLandmarks_Gauge) {
+		if (Landmark.Tag != "Goal") continue;
+		if (Landmark.Order == 1 || Landmark.Order == 2) {
+			MarkersXml ^= """<marker manialinkframeid="Frame_GaugeMarker{{{Landmark.Order}}}" box="0 6.5 0" visibility="WhenInFrustum"
+				pos="{{{Landmark.Position[0]}}} {{{Landmark.Position[1]}}} {{{Landmark.Position[2]}}}"/>""";
 		}
 	}
 
-	UIManager.UIAll.Hud3dMarkers = Markers;
+	UIManager.UIAll.MarkersXML = MarkersXml;
 }
 
 // Send hit message
@@ -1223,9 +1197,6 @@ Void AddPoints(CSmPlayer _Player, Integer _Points) {
 	if (_Player == Null || _Player.Score == Null) return;
 	_Player.Score.RoundPoints += _Points;
 	_Player.Score.Points += _Points;
-	ScoresTable::SetFooterScore(_Player, TextLib::Compose("%1: %2		%3: %4",
-		_("|A Round of the Match|Round"), TextLib::ToText(_Player.Score.RoundPoints),
-		_("|Total Points|Total"), TextLib::ToText(_Player.Score.Points)));
 }
 
 // Update damage of the given player
@@ -1239,11 +1210,12 @@ Void UpdateDamage(CSmPlayer _Player, Integer _Points) {
 		Damage += _Points;
 		Top_Damage += _Points;
 	}
+	declare netwrite Integer Net_Damage for _Player.Score;
 	if (Top_Damage > 0) {
-		ScoresTable::SetCustom2(_Player, TextLib::ToText(Damage));
+		Net_Damage = Damage;
 		Top::SetRecord(_Player, T_Damage, TextLib::ToText(Top_Damage), -Top_Damage);
 	} else {
-		ScoresTable::SetCustom2(_Player, "");
+		Net_Damage = -1;
 	}
 }
 
@@ -1258,11 +1230,12 @@ Void UpdatePasses(CSmPlayer _Player, Integer _Points) {
 		Passes += _Points;
 		Top_Passes += _Points;
 	}
+	declare netwrite Integer Net_Passes for _Player.Score;
 	if (Passes > 0) {
-		ScoresTable::SetCustom3(_Player, TextLib::ToText(Passes));
+		Net_Passes = Passes;
 		Top::SetRecord(_Player, T_Passes, TextLib::ToText(Top_Passes), -Top_Passes);
 	} else {
-		ScoresTable::SetCustom3(_Player, "");
+		Net_Passes = -1;
 	}
 }
 
@@ -1495,8 +1468,8 @@ Void MySpawnPlayer(CSmPlayer _Player) {
 		SpawnTime = Now + 3000;
 	}
 	
-	// Determine spawn block
-	declare SpawnIds = G_ClanSpawnIDs[_Player.RequestedClan];
+	// Determine spawn landmark
+	declare SpawnIds = G_ClanSpawnLandmarkIds[_Player.RequestedClan];
 	declare SpawnIndex = 0;
 	if (G_LastSpawnIndex.existskey(_Player.RequestedClan)) {
 		SpawnIndex = G_LastSpawnIndex[_Player.RequestedClan] + 1;
@@ -1505,61 +1478,63 @@ Void MySpawnPlayer(CSmPlayer _Player) {
 		}
 	}
 	G_LastSpawnIndex[_Player.RequestedClan] = SpawnIndex;
-	SM::SpawnPlayer(_Player, _Player.RequestedClan, BlockSpawns[SpawnIds[SpawnIndex]], SpawnTime);
+	SM::SpawnPlayer(_Player, _Player.RequestedClan, MapLandmarks_PlayerSpawn[SpawnIds[SpawnIndex]].PlayerSpawn, SpawnTime);
 }
 
-// Set clans of spawns and poles at start of map and each round (changing sides)
-Void AssignSpawnPoleClans() {
+// Set clans of spawns and gauges at start of map and each round (changing sides)
+Void AssignSpawnsGaugesClans() {
 	// SPAWNS
 	// Change sides
-	declare FirstSpawns = G_ClanSpawnIDs[1];
-	G_ClanSpawnIDs[1] = G_ClanSpawnIDs[2];
-	G_ClanSpawnIDs[2] = FirstSpawns;
+	declare FirstSpawns = G_ClanSpawnLandmarkIds[1];
+	G_ClanSpawnLandmarkIds[1] = G_ClanSpawnLandmarkIds[2];
+	G_ClanSpawnLandmarkIds[2] = FirstSpawns;
 	// Assign clans
-	foreach (Clan => SpawnIds in G_ClanSpawnIDs) {
-		foreach (Index => Id in SpawnIds) {
-			switch (BlockSpawns[Id].Base.Clan) {
+	foreach (Clan => SpawnLandmarkIds in G_ClanSpawnLandmarkIds) {
+		foreach (Index => Id in SpawnLandmarkIds) {
+			switch (MapLandmarks_PlayerSpawn[Id].Base.Clan) {
 				case 0: {
 					if (Clan != 3) {
-						BlockSpawns[Id].Base.Clan = Clan;
+						MapLandmarks_PlayerSpawn[Id].Base.Clan = Clan;
 					}
 				}
 				default: {
-					BlockSpawns[Id].Base.Clan = 3 - BlockSpawns[Id].Base.Clan;
+					MapLandmarks_PlayerSpawn[Id].Base.Clan = 3 - MapLandmarks_PlayerSpawn[Id].Base.Clan;
 				}
 			}
 		}
 	}
 	
-	// POLES
-	// Edit ball pole
-	if (BlockPoles.existskey(G_BallPoleId)) {
-		BlockPoles[G_BallPoleId].Base.Clan = 0;
-		BlockPoles[G_BallPoleId].Gauge.Clan = 0;
+	// GAUGES
+	// Edit ball gauge
+	if (MapLandmarks_Gauge.existskey(G_BallLandmarkId)) {
+		MapLandmarks_Gauge[G_BallLandmarkId].Base.Clan = 0;
+		MapLandmarks_Gauge[G_BallLandmarkId].Gauge.Clan = 0;
 	}
 	
 	// Change sides
-	declare FirstPole = G_ClanPoleIDs[1];
-	G_ClanPoleIDs[1] = G_ClanPoleIDs[2];
-	G_ClanPoleIDs[2] = FirstPole;
-	// Prepare poles stuff
-	foreach (Order => Id in G_ClanPoleIDs) {
+	declare FirstGauge = G_ClanGaugeLandmarkIds[1];
+	G_ClanGaugeLandmarkIds[1] = G_ClanGaugeLandmarkIds[2];
+	G_ClanGaugeLandmarkIds[2] = FirstGauge;
+	// Prepare gauge stuff
+	foreach (Order => GaugeLandmarkId in G_ClanGaugeLandmarkIds) {
+		declare GaugeLandmark <=> MapLandmarks_Gauge[GaugeLandmarkId];
+		
 		// Initialize values
-		BlockPoles[Id].Captured = False;
-		BlockPoles[Id].Gauge.ValueReal = 0.;
-		BlockPoles[Id].Gauge.Speed = 0;
+		GaugeLandmark.Gauge.Captured = False;
+		GaugeLandmark.Gauge.ValueReal = 0.;
+		GaugeLandmark.Gauge.Speed = 0;
 		
 		// Assign clans
-		switch (BlockPoles[Id].Gauge.Clan) {
+		switch (GaugeLandmark.Gauge.Clan) {
 			case 0: {
 				if (Order != 3) {
-					BlockPoles[Id].Gauge.Clan = Order;
-					BlockPoles[Id].Base.Clan = BlockPoles[Id].Gauge.Clan;
+					GaugeLandmark.Gauge.Clan = Order;
+					GaugeLandmark.Base.Clan = GaugeLandmark.Gauge.Clan;
 				}
 			}
 			default: {
-				BlockPoles[Id].Gauge.Clan = 3 - BlockPoles[Id].Gauge.Clan;
-				BlockPoles[Id].Base.Clan = BlockPoles[Id].Gauge.Clan;
+				GaugeLandmark.Gauge.Clan = 3 - GaugeLandmark.Gauge.Clan;
+				GaugeLandmark.Base.Clan = GaugeLandmark.Gauge.Clan;
 			}
 		}
 	}
@@ -1570,27 +1545,28 @@ Void UpdateBaseClans() {
 	if (!G_BallObjectsIds.existskey(0) || !Objects.existskey(G_BallObjectsIds[0])) return;
 	declare BallObject <=> Objects[G_BallObjectsIds[0]];
 	if (G_BallObjectsIds.count > 1 || BallObject.Player == Null) {
-		// Ball dropped - Reset base clan of the ball pole
-		if (BlockPoles.existskey(G_BallPoleId)) {
-			declare BallPole <=> BlockPoles[G_BallPoleId];
-			BallPole.Base.Clan = 0;
-			BallPole.Gauge.Clan = 0;
+		// Ball dropped - Reset base clan of the ball landmark
+		if (MapLandmarks_Gauge.existskey(G_BallLandmarkId)) {
+			declare BallLandmark <=> MapLandmarks_Gauge[G_BallLandmarkId];
+			BallLandmark.Base.Clan = 0;
+			BallLandmark.Gauge.Clan = 0;
 		}
 	} else {
-		// A clan carries the ball - Set carrying clan to ball pole
-		if (BlockPoles.existskey(G_BallPoleId)) {
-			declare BallPole <=> BlockPoles[G_BallPoleId];
-			BallPole.Base.Clan = BallObject.Player.CurrentClan;
-			BallPole.Gauge.Clan = BallObject.Player.CurrentClan;
+		// A clan carries the ball - Set carrying clan to ball landmark
+		if (MapLandmarks_Gauge.existskey(G_BallLandmarkId)) {
+			declare BallLandmark <=> MapLandmarks_Gauge[G_BallLandmarkId];
+			BallLandmark.Base.Clan = BallObject.Player.CurrentClan;
+			BallLandmark.Gauge.Clan = BallObject.Player.CurrentClan;
 		}
 		// Bases screw things up on some maps - Perform fix if needed
-		if (G_ClanPoleIDs.existskey(1) && BlockPoles.existskey(G_ClanPoleIDs[1])
-			&& G_ClanPoleIDs.existskey(2) && BlockPoles.existskey(G_ClanPoleIDs[2])) {
-			if (BlockPoles[G_ClanPoleIDs[1]].Base == BlockPoles[G_ClanPoleIDs[2]].Base) {
-				// Poles of the teams share the same base -.-
+		if (G_ClanGaugeLandmarkIds.existskey(1) && MapLandmarks_Gauge.existskey(G_ClanGaugeLandmarkIds[1])
+			&& G_ClanGaugeLandmarkIds.existskey(2) && MapLandmarks_Gauge.existskey(G_ClanGaugeLandmarkIds[2])) {
+			if (MapLandmarks_Gauge[G_ClanGaugeLandmarkIds[1]].Base == MapLandmarks_Gauge[G_ClanGaugeLandmarkIds[2]].Base) {
+				// Gauges of the teams share the same base -.-
 				// Change the clan of the base to the clan currently carrying the ball
-				if (G_ClanPoleIDs.existskey(BallObject.Player.CurrentClan) && BlockPoles.existskey(G_ClanPoleIDs[BallObject.Player.CurrentClan])) {
-					BlockPoles[G_ClanPoleIDs[BallObject.Player.CurrentClan]].Base.Clan = BallObject.Player.CurrentClan;
+				if (G_ClanGaugeLandmarkIds.existskey(BallObject.Player.CurrentClan)
+					&& MapLandmarks_Gauge.existskey(G_ClanGaugeLandmarkIds[BallObject.Player.CurrentClan])) {
+					MapLandmarks_Gauge[G_ClanGaugeLandmarkIds[BallObject.Player.CurrentClan]].Base.Clan = BallObject.Player.CurrentClan;
 				}
 			}
 		}
@@ -1617,15 +1593,12 @@ Boolean PickUpBall(CSmPlayer _Player, CSmObject _Object) {
 	AddPoints(_Player, 2);
 	UpdateBaseClans();
 	
-	// Update markers
-	UpdateHud3dMarkers(False);
-	
 	return True;
 }
 
 Void ResetBall(CSmObject _Ball) {
 	if (_Ball == Null) return;
-	_Ball.SetPositionAndVel(BlockPoles[G_BallPoleId].Position, <0., 0., 0.>);
+	_Ball.SetPositionAndVel(MapLandmarks_Gauge[G_BallLandmarkId].Position, <0., 0., 0.>);
 	
 	declare Ident PlayerId for _Ball;
 	PlayerId = NullId;
@@ -1633,9 +1606,6 @@ Void ResetBall(CSmObject _Ball) {
 	DropTime = -1;
 	declare Boolean AtHome for _Ball;
 	AtHome = True;
-	
-	// Update markers
-	UpdateHud3dMarkers(False);
 	
 	Message::SendBigMessage(_("The Ball has been reset!"), 3000, 1, CUIConfig::EUISound::PhaseChange, 1);
 	UpdateBaseClans();
@@ -1662,9 +1632,6 @@ Void DropBall(CSmObject _Ball, Vec3 _Position) {
 	
 	_Ball.SetPositionAndVel(_Position + <0., 1., 0.>, <0., 1., 0.>);
 	UpdateBaseClans();
-	
-	// Update markers
-	UpdateHud3dMarkers(False);
 }
 
 // Drop all balls carried by the player
@@ -1681,9 +1648,6 @@ Void DropBalls(CSmPlayer _Player) {
 		if (!Objects.existskey(ObjectIds[Index])) continue;
 		DropBall(Objects[ObjectIds[Index]], _Player.Position);
 	}
-	
-	// Update markers
-	UpdateHud3dMarkers(False);
 }
 
 // Player passes the ball
@@ -1719,9 +1683,6 @@ Void PassBall(CSmPlayer _Shooter, CSmPlayer _Victim, CSmObject _Ball) {
 		// Pass to opponent
 		UpdateBaseClans();
 	}
-	
-	// Update markers
-	UpdateHud3dMarkers(False);
 }
 
 // Updates clan scores at the top
@@ -1802,7 +1763,7 @@ Text CreateLayerExtra() {
 			
 			declare ShowHighlight	for LocalUser = True;
 			
-			declare netread Net_BallPoleIndex	for Teams[0] = -1;
+			declare netread Net_BallLandmarkIndex	for Teams[0] = -1;
 			
 			declare netread Net_StartTime	for Teams[0] = -1;
 			declare netread Net_Phase		for Teams[0] = -1;
@@ -1836,21 +1797,19 @@ Text CreateLayerExtra() {
 				// Capturing gauge
 				declare ShowGauge = False;
 				if ((Net_StartTime > 0 && Net_StartTime < ArenaNow) || LastCapturedTime > 0) {
-					foreach (Index => Pole in BlockPoles) {
-						if (Index == Net_BallPoleIndex || Net_BallPoleIndex < 0) continue;
-						if (Pole.Gauge.ValueReal <= 0.) continue;
-						declare Value = MathLib::FloorInteger(Pole.Gauge.ValueReal * 100.);
+					foreach (Index => GaugeLandmark in MapLandmarks_Gauge) {
+						if (Index == Net_BallLandmarkIndex || Net_BallLandmarkIndex < 0) continue;
+						if (GaugeLandmark.Gauge.ValueReal <= 0.) continue;
+						
+						declare Value = MathLib::FloorInteger(GaugeLandmark.Gauge.ValueReal * 100.);
 						if (Value <= 0) continue;
-						if (Value >= 100 && !Pole.Captured) {
-							Value -= 1;
-						}
+						
+						if (Value >= 100 && !GaugeLandmark.Gauge.Captured) Value -= 1;
 						Label_Capturing.Value = Value^"%";
-						Gauge_Capturing.SetRatio(Pole.Gauge.ValueReal);
-						Gauge_Capturing.SetClan(Pole.Gauge.Clan);
+						Gauge_Capturing.SetRatio(GaugeLandmark.Gauge.ValueReal);
+						Gauge_Capturing.SetClan(GaugeLandmark.Gauge.Clan);
 						LastCapturedTime = Now;
-						if (Pole.Captured) {
-							LastCapturedTime += 500;
-						}
+						if (GaugeLandmark.Gauge.Captured) LastCapturedTime += 500;
 						break;
 					}
 				}
@@ -2003,17 +1962,18 @@ Text CreateMarkersLayer() {
 			declare Label_BallMarker		<=> (Frame_BallMarker.GetFirstChild("Label_BallMarker") as CMlLabel);
 			declare Quad_BallMarker			<=>	(Frame_BallMarker.GetFirstChild("Quad_BallMarker") as CMlQuad);
 			
-			declare Frame_PoleMarker1		<=> (Page.GetFirstChild("Frame_PoleMarker1") as CMlFrame);
-			declare Frame_PoleMarker2		<=> (Page.GetFirstChild("Frame_PoleMarker2") as CMlFrame);
-			declare Label_PoleMarker1		<=> (Frame_PoleMarker1.GetFirstChild("Label_PoleMarker") as CMlLabel);
-			declare Label_PoleMarker2		<=> (Frame_PoleMarker2.GetFirstChild("Label_PoleMarker") as CMlLabel);
+			declare Frame_GaugeMarker1		<=> (Page.GetFirstChild("Frame_GaugeMarker1") as CMlFrame);
+			declare Frame_GaugeMarker2		<=> (Page.GetFirstChild("Frame_GaugeMarker2") as CMlFrame);
+			declare Label_GaugeMarker1		<=> (Frame_GaugeMarker1.GetFirstChild("Label_GaugeMarker") as CMlLabel);
+			declare Label_GaugeMarker2		<=> (Frame_GaugeMarker2.GetFirstChild("Label_GaugeMarker") as CMlLabel);
 			
 			declare netread Net_BallCarrierClan		for Teams[0] = Integer[Integer];
 			declare netread Net_RemainingDropTime	for Teams[0] = Integer[Integer];
+			declare netread Net_RestrictBallMarker	for Teams[0] = False;
 			
 			declare LastUIUpdate = -1;
 			declare LastUIUpdate2 = -1;
-			declare Ident[Integer] PoleIds;
+			declare Ident[Integer] GaugeLandmarkIds;
 
 			while (True) {
 				yield;
@@ -2024,30 +1984,34 @@ Text CreateMarkersLayer() {
 				declare CurrentPlayer <=> InputPlayer;
 				if (GUIPlayer != Null) CurrentPlayer <=> GUIPlayer;
 				
-				declare UpdatePoles = False;
-				if (PoleIds.count <= 0) {
-					UpdatePoles = True;
+				declare UpdateGauges = False;
+				if (GaugeLandmarkIds.count <= 0) {
+					UpdateGauges = True;
 				} else {
-					foreach (PoleId in PoleIds) {
-						if (!BlockPoles.existskey(PoleId)) {
-							UpdatePoles = True;
+					foreach (GaugeLandmarkId in GaugeLandmarkIds) {
+						if (!MapLandmarks_Gauge.existskey(GaugeLandmarkId)) {
+							UpdateGauges = True;
 							break;
 						}
 					}
 				}
-				if (UpdatePoles) {
-					PoleIds.clear();
-					foreach (Pole in BlockPoles) {
-						if (Pole.Tag != "Goal") continue;
-						if (Pole.Order == 1 || Pole.Order == 2) {
-							PoleIds[Pole.Order] = Pole.Id;
+				if (UpdateGauges) {
+					GaugeLandmarkIds.clear();
+					foreach (GaugeLandmark in MapLandmarks_Gauge) {
+						if (GaugeLandmark.Tag != "Goal") continue;
+						if (GaugeLandmark.Order == 1 || GaugeLandmark.Order == 2) {
+							GaugeLandmarkIds[GaugeLandmark.Order] = GaugeLandmark.Id;
 						}
 					}
 				}
 				
 				// Update ball marker
-				Quad_BallMarker.Visible = IsSpectatorMode || !Net_BallCarrierClan.existskey(0)
-					|| Teams.existskey(Net_BallCarrierClan[0] - 1) || !Frame_BallMarkerHelp.Visible;
+				Quad_BallMarker.Visible =
+						IsSpectatorMode && GUIPlayer == Null
+					||	!Net_BallCarrierClan.existskey(0)
+					||	Net_BallCarrierClan[0] == CurrentPlayer.CurrentClan
+					||	!Net_RestrictBallMarker
+					||	Frame_BallMarkerHelp.Visible;
 				
 				if (Net_BallCarrierClan.existskey(0) && Teams.existskey(Net_BallCarrierClan[0] - 1)) {
 					// Team color
@@ -2068,27 +2032,29 @@ Text CreateMarkersLayer() {
 				if (LastUIUpdate2 + 4000 > Now) continue;
 				LastUIUpdate2 = Now;
 				
-				// Update pole markers
-				foreach (Order => Id in PoleIds) {
+				// Update gauge markers
+				foreach (Order => GaugeLandmarkId in GaugeLandmarkIds) {
+					declare GaugeLandmark <=> MapLandmarks_Gauge[GaugeLandmarkId];
+					
 					declare TextValue = "";
-					declare PoleClan = BlockPoles[Id].Gauge.Clan;
-					if (Teams.existskey(PoleClan - 1)) {
+					declare GaugeClan = GaugeLandmark.Gauge.Clan;
+					if (Teams.existskey(GaugeClan - 1)) {
 						if (IsSpectatorMode) {
-							TextValue = TextLib::Compose("%1%2 %3", Teams[PoleClan - 1].ColorizedName, Teams[PoleClan - 1].ColorText, _("Attack"));
+							TextValue = TextLib::Compose("%1%2 %3", Teams[GaugeClan - 1].ColorizedName, Teams[GaugeClan - 1].ColorText, _("Attack"));
 						} else {
 							declare Action = _("Defend");
-							if (BlockPoles[Id].Gauge.Clan == CurrentPlayer.CurrentClan) {
+							if (GaugeLandmark.Gauge.Clan == CurrentPlayer.CurrentClan) {
 								Action = _("Attack");
 							}
-							TextValue = TextLib::Compose("%1%2", Teams[PoleClan - 1].ColorText, Action);
+							TextValue = TextLib::Compose("%1%2", Teams[GaugeClan - 1].ColorText, Action);
 						}
 					}
 					switch (Order) {
 						case 1: {
-							Label_PoleMarker1.Value = TextValue;
+							Label_GaugeMarker1.Value = TextValue;
 						}
 						case 2: {
-							Label_PoleMarker2.Value = TextValue;
+							Label_GaugeMarker2.Value = TextValue;
 						}
 					}
 				}
@@ -2101,13 +2067,13 @@ Text CreateMarkersLayer() {
 			<quad id="Quad_BallMarker" sizen="{{{9. * BallImageSize}}} {{{16. * BallImageSize}}}" image="file://Media/Images/SpeedBall/BallLogo.png"
 				opacity="0.9" halign="center" valign="bottom"/>
 		</frame>
-		<framemodel id="Frame_PoleMarkerFrame">
-			<label id="Label_PoleMarker" posn="0 4 -39" textsize="2" scale="0.8" halign="center" valign="center2"/>
+		<framemodel id="Model_GaugeMarkerFrame">
+			<label id="Label_GaugeMarker" posn="0 4 -39" textsize="2" scale="0.8" halign="center" valign="center2"/>
 			<quad posn="0 4 -40" sizen="16 4" style="BgsPlayerCard" substyle="BgMediaTracker" halign="center" valign="center2"/>
 			<quad posn="0 2 -40" sizen="4 8.5" opacity="0.4" halign="center" valign="center2" colorize="1 1 1" image="{{{C_ImgBaseDir}}}target.dds"/>
 		</framemodel>
-		<frameinstance id="Frame_PoleMarker1" modelid="Frame_PoleMarkerFrame" hidden="1"/>
-		<frameinstance id="Frame_PoleMarker2" modelid="Frame_PoleMarkerFrame" hidden="1"/>""";
+		<frameinstance id="Frame_GaugeMarker1" modelid="Model_GaugeMarkerFrame" hidden="1"/>
+		<frameinstance id="Frame_GaugeMarker2" modelid="Model_GaugeMarkerFrame" hidden="1"/>""";
 	return Manialink;
 }
 
@@ -2130,6 +2096,13 @@ Void CheckSettings() {
 		} else {
 			UIManager.UIAll.SendChat("The $<$0f0Ball$> is $<$f80not$> throwable anymore!");
 		}
+	}
+	
+	// Check ball marker visiblity
+	declare Last_RestrictBallMarker for This = S_RestrictBallMarker;
+	if (Last_RestrictBallMarker != S_RestrictBallMarker) {
+		Last_RestrictBallMarker = S_RestrictBallMarker;
+		UpdateHud3dMarkers();
 	}
 	
 	// Check friendly fire setting
@@ -2206,10 +2179,7 @@ Void CheckSettings() {
 		---Rules---
 	}
 	if (UpdateFooter) {
-		foreach (Player in Players) {
-			ScoresTable::SetFooterStats(Player, TextLib::Compose(_("Rounds to win: %1 (Limit: %2)"),
-				TextLib::ToText(Last_RoundsToWin), TextLib::ToText(Last_RoundsLimit)));
-		}
+		ST2::SetFooterText(TextLib::Compose(_("Rounds to win: %1 (Limit: %2)"), TextLib::ToText(Last_RoundsToWin), TextLib::ToText(Last_RoundsLimit)));
 	}
 }
 
@@ -2256,7 +2226,7 @@ Void DoWarmup() {
 		foreach (Player in Players) {
 			switch (Player.SpawnStatus) {
 				case CSmPlayer::ESpawnStatus::NotSpawned: {
-					declare Spawn <=> BlockSpawns[MathLib::Rand(0, BlockSpawns.count - 1)];
+					declare Spawn <=> MapLandmarks_PlayerSpawn[MathLib::Rand(0, MapLandmarks_PlayerSpawn.count - 1)].PlayerSpawn;
 					SM::SpawnPlayer(Player, Player.RequestedClan, Spawn);
 					switch (Player.RequestedClan) {
 						case 1: {
