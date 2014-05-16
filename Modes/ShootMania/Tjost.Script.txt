@@ -7,7 +7,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const	ScriptName			"Tjost.Script.txt"
-#Const	Version				"0.4 (2013-10-02)"
+#Const	Version				"0.5 (2014-04-06)"
 
 #Const	CompatibleMapTypes	"TjostArena,SpeedBallArena"
 
@@ -24,9 +24,7 @@
 #Include "Libs/Nadeo/TabsServer.Script.txt" as Tabs
 #Include "Libs/Nadeo/Top2.Script.txt" as Top
 #Include "Libs/Nadeo/Victory.Script.txt" as Victory
-#Include "Libs/Nadeo/ShootMania/AFK.Script.txt" as AFK
 #Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
-#Include "Libs/Nadeo/ShootMania/ScoresTable.Script.txt" as ScoresTable
 #Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
 #Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
 #Include "Libs/steeffeen/Tools.Script.txt" as Tools
@@ -37,7 +35,7 @@
 ********************************************/
 
 // Match
-#Setting	S_TimeLimit				180		as _("Time Limit per Round (seconds)")
+#Setting	S_TimeLimit				180		as _("Time Limit per Round (Seconds)")
 #Setting	S_RoundToWin			5		as _("Rounds to win a Map")
 #Setting	S_RoundsGap				2		as _("Rounds Gap to win a Map")
 #Setting	S_RoundsLimit			10		as _("Round Limit per Map (first Team reaching X wins)")
@@ -56,7 +54,6 @@
 ********************************************/
 
 #Const 	C_ImgBaseDir			"file://Media/Manialinks/Shootmania/Common/"
-#Const	C_ManageAFKPlayers		True	// Force afk players into spec
 // Gameplay
 #Const	C_CrazyModeArmorGain	9.		// Armor gain while playing in crazy mode (Range: 0.0 - 10.0)
 #Const	C_OvertimeTimeLimit		60		// Time limit of overtime
@@ -64,7 +61,7 @@
 #Const	C_TimePerArmorLose		2.		// Seconds to lose 1 armor near own pole & spawn (camping prevention) (-1 to disable)
 #Const	C_CapturePointsFactor	2.		// Capture points: C_CapturePointsFactor * (2 + Number of opponents)
 #Const	C_PointsForBackspace	-1		// Points granted if someone presses backspace
-#Const	C_DefaultCampZoneRange	25.	// Distance for reducing armor and preventing backspace weapon change
+#Const	C_DefaultCampZoneRange	25.		// Distance for reducing armor and preventing backspace weapon change
 #Const	C_BotPower				10.		// Power/Strength of bots
 #Const	C_DefaultRespawnTime	3000	// Time it takes to respawn usually
 #Const	C_RespawnPenaltyTime	5000	// Respawn penalty extra time
@@ -104,7 +101,6 @@ MB_LogVersion(AFK::GetScriptName(), AFK::GetScriptVersion());
 MB_LogVersion(Interface::GetScriptName(), Interface::GetScriptVersion());
 MB_LogVersion(Message::GetScriptName(), Message::GetScriptVersion());
 MB_LogVersion(Score::GetScriptName(), Score::GetScriptVersion());
-MB_LogVersion(ScoresTable::GetScriptName(), ScoresTable::GetScriptVersion());
 MB_LogVersion(SM::GetScriptName(), SM::GetScriptVersion());
 MB_LogVersion(SpawnScreen::GetScriptName(), SpawnScreen::GetScriptVersion());
 MB_LogVersion(Tabs::GetScriptName(), Tabs::GetScriptVersion());
@@ -117,13 +113,13 @@ MB_LogVersion(Victory::GetScriptName(), Victory::GetScriptVersion());
 SpawnScreen::SetModeName("Tjost");
 SpawnScreen::ResetRulesSection();
 
-declare SectionRules = TextLib::Compose(_("%1Keep%2 the %1Opponents away%2 from your Goal Post.\n%1Reach%2 the %1Goal%2 on the other side of the Map %1to score%2 for your Team.\n\nIf neither Team manages to score after %3 seconds, %1Overtime%2 kicks in!\nNow you have %4 seconds to get as close to your Team's Goal Post as possible."), "$<$0f0", "$>", "$<$f80"^S_TimeLimit^"$>", "$<$f80"^C_OvertimeTimeLimit^"$>");
+declare SectionRules = TextLib::Compose(_("%1Keep%2 the %1Opponents away%2 from your Goal Post.\n%1Reach%2 the %1Goal%2 on the other Side of the Map %1to score%2 for your Team.\n\nIf neither Team manages to score after %3 Seconds, %1Overtime%2 kicks in!\nNow you have %4 Seconds to get as close to your Team's Goal Post as possible."), "$<$0f0", "$>", "$<$f80"^S_TimeLimit^"$>", "$<$f80"^C_OvertimeTimeLimit^"$>");
 SpawnScreen::AddSubsection(_("Rules"), SectionRules, 0.);
 
 if (S_EnableCampZone) {
 	declare SectionGrantArmor = TextLib::Compose("%1\n%2",
-		_("Camping your Spawn or Goal Post the whole time will make you lose Armor constantly."),
-		_("While staying in the Camp Zone your weapons won't reload."));
+		_("Camping your Spawn or Goal in Crazy Mode will make you lose Armor constantly."),
+		_("While staying in the Camp Zone your Weapons won't reload."));
 	SpawnScreen::AddSubsection(TextLib::Compose(_("Camp Zone%1"), " ("^G_CampZoneRange^"m)"), SectionGrantArmor, 52.);
 }
 
@@ -182,16 +178,33 @@ UIManager.UIAll.UILayers.add(ExtrasLayer);
 	UIManager.UIAll.UILayers.add(TabsLayer);
 	
 	// ScoresTable
-	ScoresTable::Load();
-	ScoresTable::SetTableWidth(218.);
-	ScoresTable::SetTableFormat(2, 6);
-	ScoresTable::SetTableBackgroundLeftRightImage(C_ImgBaseDir^"scoresBg.dds", C_ImgBaseDir^"scoresBg_left.dds", C_ImgBaseDir^"scoresBg_right.dds",
-		"", "", 90, 50, 50, <0.05, 54.>, <237., 176.8>);
-	ScoresTable::SetColumnsWidth(1.7, 1.2, 3., 16., 1.4, 1.4, 0.1, 2.5, 2.5, 2.5, 3.2);
-	ScoresTable::SetDisplayTeamScore(True);
-	ScoresTable::SetColumnName("Custom2", _("|Amount of damage inflicted|Dmg"));
-	ScoresTable::SetColumnName("Custom3", _("|Number of captures done|Caps"));
-	ScoresTable::Build();
+	ST2::SetStyle("LibST_SMBaseTeams");
+	ST2::SetStyle("LibST_SMBasePoints");
+	ST2::SetStyle("LibST_SMWithLegends");
+	ST2::SetFormat(2, 6);
+	ST2::SetSizeRatio(<1.14, 1.>);
+	ST2::SetTeamsScoresVisibility(True);
+	ST2::CreateCol(T_Damage, _("|Amount of damage inflicted|Dmg"), "-", 2.8, 80.);
+	ST2::SetColScript(T_Damage, """
+		declare netread Net_Damage for _Score = -1;
+		if (Net_Damage > 0) {
+			Label_Col.Value = TL::ToText(Net_Damage);
+		} else {
+			Label_Col.Value = "";
+		}
+	""");
+	ST2::CreateCol(T_Captures, _("|Number of captures done|Caps"), "-", 2.8, 90.);
+	ST2::SetColScript(T_Captures, """
+		declare netread Net_Captures for _Score = -1;
+		if (Net_Captures > 0) {
+			Label_Col.Value = TL::ToText(Net_Captures);
+		} else {
+			Label_Col.Value = "";
+		}
+	""");
+	ST2::SetColLegend("LibST_SMRoundPoints", _("|Amount of points in the current round of the match|Round"));
+	ST2::SetColLegend("LibST_SMPoints", _("|Total amount of points in the match|Total"));
+	ST2::Build("SM");
 	
 	// Tops tab
 	Top::Load();
@@ -226,15 +239,15 @@ UIManager.UIAll.SendNotice(_("New Match"),
 G_ClanSpawns.clear();
 G_ClanPoles.clear();
 G_Camps.clear();
-foreach (Base in Bases) {
+foreach (Base in MapBases) {
 	Base.Clan = 0;
 	Base.IsActive = True;
 }
-foreach (Spawn in BlockSpawns) {
+foreach (Spawn in MapLandmarks_PlayerSpawn) {
 	if (Spawn.Tag != "Spawn") continue;
 	G_ClanSpawns[Spawn.Order] = Spawn.Id;
 }
-foreach (Pole in BlockPoles) {
+foreach (Pole in MapLandmarks_Gauge) {
 	Pole.Gauge.Clan = 0;
 	Pole.Gauge.Max = 1000;
 	switch (Pole.Tag) {
@@ -246,7 +259,7 @@ foreach (Pole in BlockPoles) {
 		}
 	}
 }
-UIManager.UIAll.Hud3dMarkers = GetHud3dMarkers();
+UIManager.UIAll.MarkersXML = GetHud3dMarkers();
 
 // Camp zone range
 {
@@ -263,7 +276,6 @@ Victory::MatchBegin();
 ClanScores[1] = 0;
 ClanScores[2] = 0;
 Top::ResetAll();
-ScoresTable::StartMatch();
 foreach (Player in AllPlayers) {
 	InitPlayer(Player, True);
 }
@@ -297,7 +309,6 @@ EndTime = UIManager.UIAll.CountdownEndTime + C_OvertimeTimeLimit * 1000;
 ***OnNewPlayer***
 ***
 InitPlayer(Player, False);
-ScoresTable::RestoreCustomScores(Player);
 
 declare UI <=> UIManager.GetUI(Player);
 if (UI == Null) continue;
@@ -307,7 +318,6 @@ Tabs::UseTabs(UI, "ScoresTab");
 ***OnNewSpectator***
 ***
 InitPlayer(Spectator, False);
-ScoresTable::RestoreCustomScores(Spectator);
 
 declare UI <=> UIManager.GetUI(Spectator);
 if (UI == Null) continue;
@@ -363,15 +373,15 @@ foreach (Player in Players) {
 				}
 				
 				// Check for captures
-				if (Player.BlockPole != Null && Player.BlockPole.Gauge != Null && Player.BlockPole.Gauge.Clan == Player.CurrentClan) {
-					Player.BlockPole.Gauge.ValueReal = 1.0;
-					Player.BlockPole.Gauge.Speed = 1000;
+				if (Player.CapturedLandmark != Null && Player.CapturedLandmark.Gauge != Null && Player.CapturedLandmark.Gauge.Clan == Player.CurrentClan) {
+					Player.CapturedLandmark.Gauge.ValueReal = 1.0;
+					Player.CapturedLandmark.Gauge.Speed = 1000;
 				}
 				
 				if (Net_Overtime && G_ClanPoles.existskey(Player.CurrentClan)) {
 					// Check for reached distance
 					declare netwrite Net_ClanDistances for Teams[0] = Real[Integer];
-					declare DistancePole = Tools::Round(MathLib::Distance(Player.Position, BlockPoles[G_ClanPoles[Player.CurrentClan]].Position) - 3.19,
+					declare DistancePole = Tools::Round(MathLib::Distance(Player.Position, MapLandmarks_Gauge[G_ClanPoles[Player.CurrentClan]].Position) - 3.19,
 						1);
 					if (!Net_ClanDistances.existskey(Player.CurrentClan) || Net_ClanDistances[Player.CurrentClan] < 0.
 						|| DistancePole < Net_ClanDistances[Player.CurrentClan]) {
@@ -389,12 +399,12 @@ foreach (Event in PendingEvents) {
 	switch (Event.Type) {
 		case CSmModeEvent::EType::OnCapture: {
 			// Goal captured!
-			Victory::SetRoundWinnerIfNoWinner(Event.BlockPole.Gauge.Clan);
+			Victory::SetRoundWinnerIfNoWinner(Event.Landmark.Gauge.Clan);
 			// Grant points for capture
 			declare CSmPlayer Capturer <=> Null;
-			declare CapturePoints = MathLib::FloorInteger((2. + ClansNbPlayers[3 - Event.BlockPole.Gauge.Clan]) * C_CapturePointsFactor);
-			foreach (PlayerId in Event.BlockPole.Sector.PlayersIds) {
-				if (!Players.existskey(PlayerId) || Players[PlayerId].CurrentClan != Event.BlockPole.Gauge.Clan) continue;
+			declare CapturePoints = MathLib::FloorInteger((2. + ClansNbPlayers[3 - Event.Landmark.Gauge.Clan]) * C_CapturePointsFactor);
+			foreach (PlayerId in Event.Landmark.Sector.PlayersIds) {
+				if (!Players.existskey(PlayerId) || Players[PlayerId].CurrentClan != Event.Landmark.Gauge.Clan) continue;
 				Capturer <=> Players[PlayerId];
 				Score::AddPoints(Capturer, CapturePoints);
 			}
@@ -424,14 +434,14 @@ foreach (Event in PendingEvents) {
 			Discard(Event);
 		}
 		case CSmModeEvent::EType::OnArmorEmpty: {
-			if (Event.Shooter == Null && C_ManageAFKPlayers) {
+			if (Event.Shooter == Null && S_AutoManageAFK) {
 				// AFK check with last death position
 				declare LastDeathPosition for Event.Victim = <-1., -1., -1.>;
 				if (LastDeathPosition == Event.Victim.Position) {
 					// Died on same spot - Afk! - Switch to spec
 					declare UI <=> UIManager.GetUI(Event.Victim);
 					if (UI != Null) {
-						UI.SendNotice(_("You are inactive! Switching to spec..."),
+						UI.SendNotice(_("You are inactive! Switching to Spec..."),
 							CUIConfig::ENoticeLevel::Default, Null, CUIConfig::EAvatarVariant::Default, 
 							CUIConfig::EUISound::Silence, 0);
 					}
@@ -588,7 +598,6 @@ MB_Sleep(500);
 ***
 Score::MatchEnd();
 Victory::MatchEnd();
-ScoresTable::EndMatch();
 UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
 	
 foreach (Clan => Team in Teams) {
@@ -621,7 +630,7 @@ UIManager.UILayerDestroyAll();
 	FUNCTIONS
 ********************************************/
 
-// Prepare map and blocks for the next round
+// Prepare map and landmarks for the next round
 Void PrepareNextRound() {
 	// VALUES
 	declare netwrite Net_ClanDistances for Teams[0] = Real[Integer];
@@ -635,8 +644,8 @@ Void PrepareNextRound() {
 	G_ClanPoles[2] = Temp;
 	// Assign teams & values
 	foreach (Clan => PoleId in G_ClanPoles) {
-		if (!BlockPoles.existskey(PoleId)) continue;
-		declare Pole <=> BlockPoles[PoleId];
+		if (!MapLandmarks_Gauge.existskey(PoleId)) continue;
+		declare Pole <=> MapLandmarks_Gauge[PoleId];
 		Pole.Base.Clan = Clan;
 		Pole.Gauge.Clan = Clan;
 		Pole.Gauge.Speed = 0;
@@ -651,8 +660,8 @@ Void PrepareNextRound() {
 	G_ClanSpawns[2] = Temp;
 	// Assign teams
 	foreach (Clan => SpawnId in G_ClanSpawns) {
-		if (!BlockSpawns.existskey(SpawnId)) continue;
-		BlockSpawns[SpawnId].Base.Clan = Clan;
+		if (!MapLandmarks_PlayerSpawn.existskey(SpawnId)) continue;
+		MapLandmarks_PlayerSpawn[SpawnId].Base.Clan = Clan;
 	}
 }
 
@@ -734,7 +743,7 @@ Void MySpawnPlayer(CSmPlayer _Player, Boolean _RandomWeapon, Boolean _Penalty) {
 			TextLib::ToText((C_DefaultRespawnTime + C_RespawnPenaltyTime) / 1000));
 		Message::SendStatusMessage(_Player, Message, 3500, 1);
 	}
-	SM::SpawnPlayer(_Player, _Player.RequestedClan, BlockSpawns[G_ClanSpawns[_Player.RequestedClan]], SpawnTime);
+	SM::SpawnPlayer(_Player, _Player.RequestedClan, MapLandmarks_PlayerSpawn[G_ClanSpawns[_Player.RequestedClan]].PlayerSpawn, SpawnTime);
 }
 
 // Check for changed script settings
@@ -759,13 +768,6 @@ Void CheckModeSettings() {
 	if (Old_GrantArmorOnHit != S_GrantArmorOnHit) {
 		Old_GrantArmorOnHit = S_GrantArmorOnHit;
 		UpdateRules = True;
-	}
-	
-	// Handle afk players
-	declare LastAfkHandling for This = -1;
-	if (C_ManageAFKPlayers && StartTime + 10000 < Now && LastAfkHandling + 10000 < Now) {
-		LastAfkHandling = Now;
-		AFK::ManageAFKPlayers();
 	}
 	
 	// Camp zone
@@ -797,7 +799,7 @@ Void CheckModeSettings() {
 // Get Hud3dMarkers
 Text GetHud3dMarkers() {
 	declare Markers = "";
-	foreach (Pole in BlockPoles) {
+	foreach (Pole in MapLandmarks_Gauge) {
 		if (Pole.Order == 1 || Pole.Order == 2) {
 			Markers ^= """<marker manialinkframeid="Frame_PoleMarker{{{Pole.Order}}}" pos="{{{Tools::GetPosn(Pole.Position)}}}" box="0 6 0"
 				visibility="WhenInFrustum"/>""";
@@ -835,7 +837,7 @@ Text GetMarkersLayerManialink() {
 				if (LastMapId != Map.Id) {
 					LastMapId = Map.Id;
 					PoleIds.clear();
-					foreach (Pole in BlockPoles) {
+					foreach (Pole in MapLandmarks_Gauge) {
 						if (Pole.Order == 1 || Pole.Order == 2) {
 							PoleIds[Pole.Order] = Pole.Id;
 						}
@@ -844,8 +846,8 @@ Text GetMarkersLayerManialink() {
 				
 				// Update pole markers
 				foreach (Order => Id in PoleIds) {
-					if (!BlockPoles.existskey(Id)) continue;
-					declare Pole <=> BlockPoles[Id];
+					if (!MapLandmarks_Gauge.existskey(Id)) continue;
+					declare Pole <=> MapLandmarks_Gauge[Id];
 					declare Tag = "";
 					declare PoleClan = Pole.Gauge.Clan - 1;
 					if (Teams.existskey(PoleClan)) {
@@ -958,17 +960,17 @@ Boolean IsInCampZone(CSmPlayer _Player) {
 	if (!S_EnableCampZone || _Player == Null) return False;
 	if (_Player.SpawnStatus != CSmPlayer::ESpawnStatus::Spawned) return False;
 	if (_Player.StartTime + 1500 > Now) return False;
-	if (G_ClanPoles.existskey(_Player.CurrentClan) && BlockPoles.existskey(G_ClanPoles[_Player.CurrentClan])) {
-		declare DistancePole = MathLib::Distance(_Player.Position, BlockPoles[G_ClanPoles[3 - _Player.CurrentClan]].Position);
+	if (G_ClanPoles.existskey(_Player.CurrentClan) && MapLandmarks_Gauge.existskey(G_ClanPoles[_Player.CurrentClan])) {
+		declare DistancePole = MathLib::Distance(_Player.Position, MapLandmarks_Gauge[G_ClanPoles[3 - _Player.CurrentClan]].Position);
 		if (DistancePole <= G_CampZoneRange) return True;
 	}
-	if (G_ClanSpawns.existskey(_Player.CurrentClan) && BlockSpawns.existskey(G_ClanSpawns[_Player.CurrentClan])) {
-		declare DistanceSpawn = MathLib::Distance(_Player.Position, BlockSpawns[G_ClanSpawns[_Player.CurrentClan]].Position);
+	if (G_ClanSpawns.existskey(_Player.CurrentClan) && MapLandmarks_PlayerSpawn.existskey(G_ClanSpawns[_Player.CurrentClan])) {
+		declare DistanceSpawn = MathLib::Distance(_Player.Position, MapLandmarks_PlayerSpawn[G_ClanSpawns[_Player.CurrentClan]].Position);
 		if (DistanceSpawn <= G_CampZoneRange) return True;
 	}
 	foreach (CampId in G_Camps) {
-		if (!BlockPoles.existskey(CampId)) continue;
-		declare Camp <=> BlockPoles[CampId];
+		if (!MapLandmarks_Gauge.existskey(CampId)) continue;
+		declare Camp <=> MapLandmarks_Gauge[CampId];
 		if (Camp.Order != 0 && Camp.Order != _Player.CurrentClan) continue;
 		declare DistanceCamp = MathLib::Distance(_Player.Position, Camp.Position);
 		if (DistanceCamp <= G_CampZoneRange) return True;
@@ -978,7 +980,7 @@ Boolean IsInCampZone(CSmPlayer _Player) {
 
 // Update damage top
 Void UpdateDamage(CSmPlayer _Player, Integer _Damage) {
-	if (_Player == Null) return;
+	if (_Player == Null || _Player.Score == Null) return;
 	declare Top_Damage for _Player = 0;
 	if (_Damage == 0) {
 		Top_Damage = _Damage;
@@ -986,10 +988,9 @@ Void UpdateDamage(CSmPlayer _Player, Integer _Damage) {
 		declare Dmg = _Damage / 100;
 		Top_Damage += Dmg;
 	}
-	if (Top_Damage == 0) {
-		ScoresTable::SetCustom2(_Player, "");
-	} else {
-		ScoresTable::SetCustom2(_Player, TextLib::ToText(Top_Damage));
+	declare netwrite Integer Net_Damage for _Player.Score;
+	Net_Damage = Top_Damage;
+	if (Top_Damage != 0) {
 		Top::SetRecord(_Player, T_Damage, TextLib::ToText(Top_Damage), -Top_Damage);
 	}
 }
@@ -1003,10 +1004,9 @@ Void UpdateCaptures(CSmPlayer _Player, Integer _Captures) {
 	} else {
 		Top_Captures += _Captures;
 	}
-	if (Top_Captures == 0) {
-		ScoresTable::SetCustom3(_Player, "");
-	} else {
-		ScoresTable::SetCustom3(_Player, TextLib::ToText(Top_Captures));
+	declare netwrite Integer Net_Captures for _Player.Score;
+	Net_Captures = Top_Captures;
+	if (Top_Captures != 0) {
 		Top::SetRecord(_Player, T_Captures, TextLib::ToText(Top_Captures), -Top_Captures);
 	}
 }
