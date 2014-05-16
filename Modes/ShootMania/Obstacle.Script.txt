@@ -10,7 +10,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const ScriptName				"Obstacle.Script.txt"
-#Const Version					"2.01 (2013-12-08)"
+#Const Version					"2.1 (2014-04-27)"
 #Const CompatibleMapTypes		"ObstacleArena,ObstacleTitleArena,TimeAttackArena"
 
 /*********************************************
@@ -23,7 +23,6 @@
 #Include "Libs/Nadeo/Json.Script.txt" as Json
 #Include "Libs/Nadeo/Message.Script.txt" as Message
 #Include "Libs/Nadeo/TabsServer.Script.txt" as Tabs
-#Include "Libs/Nadeo/ShootMania/AFK.Script.txt" as AFK
 #Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
 #Include "Libs/Nadeo/ShootMania/ScoresTable.Script.txt" as ScoresTables
 #Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
@@ -357,18 +356,18 @@ UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
 // Prepare new map
 Records::SubmitMap(G_Solo);
 PrepareMap();
-UIManager.UIAll.Hud3dMarkers = CreateHud3dMarkers();
+UIManager.UIAll.MarkersXML = CreateHud3dMarkers();
 LayerMarkers.ManialinkPage = CreateLayerMarkers();
 LayerMarkers.IsVisible = True;
 LayerUtilities.IsVisible = True;
 
 // Place items
-foreach (Index => Anchor in ObjectAnchors) {
-	switch (Anchor.ItemName) {
+foreach (AnchorLandmark in MapLandmarks_ObjectAnchor) {
+	switch (AnchorLandmark.ObjectAnchor.ItemName) {
 		case T_ItemOffzone: {
 			declare Object = ObjectCreate(G_ItemIdents[T_ItemOffzone]);
-			Object.SetAnchor(Anchor);
-			declare metadata Meta_BuffDuration for Anchor = 5.;
+			Object.SetAnchor(AnchorLandmark.ObjectAnchor);
+			declare metadata Meta_BuffDuration for AnchorLandmark = 5.;
 			declare Text ItemName for Object;
 			declare Real Duration for Object;
 			ItemName = T_ItemOffzone;
@@ -376,9 +375,9 @@ foreach (Index => Anchor in ObjectAnchors) {
 		}
 		case T_ItemAmmo: {
 			declare Object = ObjectCreate(G_ItemIdents[T_ItemAmmo]);
-			Object.SetAnchor(Anchor);
-			declare metadata Meta_GrantAmmoDuration for Anchor = 0.;
-			declare metadata Meta_GrantAmmoAmount for Anchor = 1.;
+			Object.SetAnchor(AnchorLandmark.ObjectAnchor);
+			declare metadata Meta_GrantAmmoDuration for AnchorLandmark = 0.;
+			declare metadata Meta_GrantAmmoAmount for AnchorLandmark = 1.;
 			declare Text ItemName for Object;
 			declare Real Duration for Object;
 			declare Real Amount for Object;
@@ -565,13 +564,13 @@ foreach (Player in Players) {
 			}
 			
 			// Manage checkpoints + goals
-			if (Player.BlockPole == Null || Player.Score == Null) continue;
+			if (Player.CapturedLandmark == Null || Player.Score == Null) continue;
 			declare CheckpointsTimeLast for Player.Score = Integer[Ident];
-			switch (Player.BlockPole.Tag) {
+			switch (Player.CapturedLandmark.Tag) {
 				case "Goal": {
 					if (CheckpointsTimeLast.count >= G_CheckpointsTotal) {
 						// Run finish
-						ActivateFinish(Player, Player.BlockPole.Id);
+						ActivateFinish(Player, Player.CapturedLandmark.Id);
 						continue;
 					}
 					// Checkpoint missed
@@ -599,13 +598,13 @@ foreach (Player in Players) {
 				}
 				case "Portal": {
 					// Portal
-					UsePortal(Player, Player.BlockPole.Id);
+					UsePortal(Player, Player.CapturedLandmark.Id);
 				}
 				default: {
 					// Checkpoint?
-					if (!IsCheckpoint(Player.BlockPole) || CheckpointsTimeLast.existskey(Player.BlockPole.Id)) continue;
+					if (!IsCheckpoint(Player.CapturedLandmark) || CheckpointsTimeLast.existskey(Player.CapturedLandmark.Id)) continue;
 					// New Checkpoint!
-					ActivateCheckpoint(Player, Player.BlockPole.Id);
+					ActivateCheckpoint(Player, Player.CapturedLandmark.Id);
 				}
 			}
 		}
@@ -630,19 +629,19 @@ foreach (Event in XmlRpc.PendingEvents) {
 			declare Index = TextLib::ToInteger(Params[1]);
 			if (Index >= 0) {
 				// Jump to checkpoint
-				declare CSmBlockPole Target <=> Null;
-				foreach (Pole in BlockPoles) {
-					if (!IsCheckpoint(Pole)) continue;
-					if (Pole.Order != Index) continue;
-					Target <=> Pole;
+				declare CSmMapLandmark Target <=> Null;
+				foreach (GaugeLandmark in MapLandmarks_Gauge) {
+					if (!IsCheckpoint(GaugeLandmark)) continue;
+					if (GaugeLandmark.Order != Index) continue;
+					Target <=> GaugeLandmark;
 					break;
 				}
 				if (Target == Null) {
 					declare PoleIndex = 0;
-					foreach (Pole in BlockPoles) {
-						if (!IsCheckpoint(Pole)) continue;
+					foreach (GaugeLandmark in MapLandmarks_Gauge) {
+						if (!IsCheckpoint(GaugeLandmark)) continue;
 						if (PoleIndex == Index) {
-							Target <=> Pole;
+							Target <=> GaugeLandmark;
 							break;
 						}
 						PoleIndex += 1;
@@ -838,9 +837,9 @@ Void CheckScriptSettings() {
 }
 
 // Check if the given pole is a valid checkpoint
-Boolean IsCheckpoint(CSmBlockPole _Pole) {
-	if (_Pole == Null) return False;
-	return ("Checkpoint" == TextLib::SubText(_Pole.Tag, 0, 10));
+Boolean IsCheckpoint(CSmMapLandmark _GaugeLandmark) {
+	if (_GaugeLandmark == Null || _GaugeLandmark.Gauge == Null) return False;
+	return ("Checkpoint" == TextLib::SubText(_GaugeLandmark.Tag, 0, 10));
 }
 
 // Send xmlrpc callback
@@ -866,35 +865,37 @@ Void SendXmlRpcCallback(Text _CallbackName, CSmPlayer _Player, Integer _RunTime,
 
 // Determine closest CPSpawn
 Ident GetClosestSpawn(Ident _CheckPointId, Ident[] _SpawnIds) {
-	if (!BlockPoles.existskey(_CheckPointId)) return NullId;
-	declare Pole <=> BlockPoles[_CheckPointId];
+	if (!MapLandmarks_Gauge.existskey(_CheckPointId)) return NullId;
+	declare GaugeLandmark <=> MapLandmarks_Gauge[_CheckPointId];
 	declare ClosestSpawn = NullId;
 	declare ClosestDistance = -1.0;
 	foreach (Id in _SpawnIds) {
-		declare Distance = MathLib::Distance(Pole.Position, BlockSpawns[Id].Position);
+		if (!MapLandmarks_PlayerSpawn.existskey(Id)) continue;
+		declare SpawnLandmark <=> MapLandmarks_PlayerSpawn[Id];
+		declare Distance = MathLib::Distance(GaugeLandmark.Position, SpawnLandmark.Position);
 		if (Distance >= ClosestDistance && ClosestDistance >= 0) continue;
 		ClosestDistance = Distance;
-		ClosestSpawn = BlockSpawns[Id].Id;
+		ClosestSpawn = SpawnLandmark.Id;
 	}
 	return ClosestSpawn;
 }
 Ident GetClosestSpawn(Ident _CheckPointId) {
-	if (!BlockPoles.existskey(_CheckPointId)) return NullId;
-	declare Pole <=> BlockPoles[_CheckPointId];
+	if (!MapLandmarks_Gauge.existskey(_CheckPointId)) return NullId;
+	declare GaugeLandmark <=> MapLandmarks_Gauge[_CheckPointId];
 	declare SpawnIds = Ident[];
 	
-	foreach (Spawn in BlockSpawns) {
-		if (Pole.Tag == "No-Function") continue;
-		if (Spawn.Tag != "CPSpawn") continue;
-		if (Pole.Order != 0 && Pole.Order != Spawn.Order) continue;
-		SpawnIds.add(Spawn.Id);
+	foreach (SpawnLandmark in MapLandmarks_PlayerSpawn) {
+		if (SpawnLandmark.Tag == "No-Function") continue;
+		if (SpawnLandmark.Tag != "CPSpawn") continue;
+		if (GaugeLandmark.Order != 0 && GaugeLandmark.Order != SpawnLandmark.Order) continue;
+		SpawnIds.add(SpawnLandmark.Id);
 	}
 	if (SpawnIds.count > 0) return GetClosestSpawn(_CheckPointId, SpawnIds);
 	
-	foreach (Spawn in BlockSpawns) {
-		if (Spawn.Tag != "CPSpawn") continue;
-		if (Pole.Order <= Spawn.Order) continue;
-		SpawnIds.add(Spawn.Id);
+	foreach (SpawnLandmark in MapLandmarks_PlayerSpawn) {
+		if (SpawnLandmark.Tag != "CPSpawn") continue;
+		if (GaugeLandmark.Order <= SpawnLandmark.Order) continue;
+		SpawnIds.add(SpawnLandmark.Id);
 	}
 	return GetClosestSpawn(_CheckPointId, SpawnIds);
 }
@@ -907,16 +908,16 @@ Void UpdatePoleIds(CSmPlayer _Player) {
 	declare netwrite Text Net_PoleIds for _Player;
 	
 	declare PoleIds = Ident[];
-	foreach (Pole in BlockPoles) {
-		if (Pole.Tag == "No-Function") continue;
-		if (CheckpointsTimeLast.existskey(Pole.Id)) continue;
-		if (Pole.Tag == "Goal" && CheckpointsTimeLast.count < G_CheckpointsTotal) continue;
-		if (Pole.Tag == "Portal") {
-			declare SpawnId = GetClosestSpawn(Pole.Id);
-			if (BlockSpawns.existskey(SpawnId)) PoleIds.add(SpawnId);
+	foreach (GaugeLandmark in MapLandmarks_Gauge) {
+		if (GaugeLandmark.Tag == "No-Function") continue;
+		if (CheckpointsTimeLast.existskey(GaugeLandmark.Id)) continue;
+		if (GaugeLandmark.Tag == "Goal" && CheckpointsTimeLast.count < G_CheckpointsTotal) continue;
+		if (GaugeLandmark.Tag == "Portal") {
+			declare SpawnId = GetClosestSpawn(GaugeLandmark.Id);
+			if (MapLandmarks_PlayerSpawn.existskey(SpawnId)) PoleIds.add(SpawnId);
 		}
-		if (Pole.Order > 0 && Pole.Order != CheckpointsTimeLast.count + 1) continue;
-		PoleIds.add(Pole.Id);
+		if (GaugeLandmark.Order > 0 && GaugeLandmark.Order != CheckpointsTimeLast.count + 1) continue;
+		PoleIds.add(GaugeLandmark.Id);
 	}
 	
 	declare String = "";
@@ -1074,12 +1075,12 @@ Text CreateLayerMarkers() {
 					image="file://Media/Manialinks/ShootMania/Common/target.dds"/>
 			</frame>
 		</framemodel>""";
-	foreach (Pole in BlockPoles) {
-		if (Pole.Tag == "No-Function") continue;
-		if (Pole.Tag != "Goal" && Pole.Order == 0) {
-			Manialink ^= """<frameinstance id="Frame_Marker{{{Pole.Id}}}" modelid="FrameModel_CP" hidden="1"/>""";
+	foreach (GaugeLandmark in MapLandmarks_Gauge) {
+		if (GaugeLandmark.Tag == "No-Function") continue;
+		if (GaugeLandmark.Tag != "Goal" && GaugeLandmark.Order == 0) {
+			Manialink ^= """<frameinstance id="Frame_Marker{{{GaugeLandmark.Id}}}" modelid="FrameModel_CP" hidden="1"/>""";
 		} else {
-			Manialink ^= """<frameinstance id="Frame_Marker{{{Pole.Id}}}" modelid="FrameModel_Marker" hidden="1"/>""";
+			Manialink ^= """<frameinstance id="Frame_Marker{{{GaugeLandmark.Id}}}" modelid="FrameModel_Marker" hidden="1"/>""";
 		}
 	}
 	return Manialink^G_DefaultMarkerFrames;
@@ -1088,10 +1089,10 @@ Text CreateLayerMarkers() {
 // Create hud3dmarkers
 Text CreateHud3dMarkers() {
 	declare Markers = """<now value="{{{Now}}}"/>""";
-	foreach (Pole in BlockPoles) {
-		if (Pole.Tag == "No-Function") continue;
-		Markers ^= """<marker pos="{{{Tools::GetPosn(Pole.Position)}}}" box="0 6 0" visibility="WhenInFrustum"
-			manialinkframeid="Frame_Marker{{{Pole.Id}}}"/>""";
+	foreach (GaugeLandmark in MapLandmarks_Gauge) {
+		if (GaugeLandmark.Tag == "No-Function") continue;
+		Markers ^= """<marker pos="{{{Tools::GetPosn(GaugeLandmark.Position)}}}" box="0 6 0" visibility="WhenInFrustum"
+			manialinkframeid="Frame_Marker{{{GaugeLandmark.Id}}}"/>""";
 	}
 	return Markers^G_DefaultMarkers;
 }
@@ -1107,46 +1108,46 @@ Void PrepareMap() {
 	G_DefaultMarkers = "";
 	G_DefaultMarkerFrames = "";
 	
-	foreach (Base in Bases) {
+	foreach (Base in MapBases) {
 		Base.IsActive = True;
 	}
-	foreach (Pole in BlockPoles) {
-		Pole.Gauge.ValueReal = 1.0;
-		if (IsCheckpoint(Pole)) {
-			if (Pole.Order == 0 || !CheckpointOrders.exists(Pole.Order)) {
+	foreach (GaugeLandmark in MapLandmarks_Gauge) {
+		GaugeLandmark.Gauge.ValueReal = 1.0;
+		if (IsCheckpoint(GaugeLandmark)) {
+			if (GaugeLandmark.Order == 0 || !CheckpointOrders.exists(GaugeLandmark.Order)) {
 				G_CheckpointsTotal += 1;
-				CheckpointOrders.add(Pole.Order);
+				CheckpointOrders.add(GaugeLandmark.Order);
 			}
-		} else if (Pole.Tag == "Portal" || Pole.Tag == "CheckpointType3") {
-			declare SpawnId = GetClosestSpawn(Pole.Id);
-			if (!BlockSpawns.existskey(SpawnId)) continue;
-			declare Spawn <=> BlockSpawns[SpawnId];
+		} else if (GaugeLandmark.Tag == "Portal" || GaugeLandmark.Tag == "CheckpointType3") {
+			declare SpawnId = GetClosestSpawn(GaugeLandmark.Id);
+			if (!MapLandmarks_PlayerSpawn.existskey(SpawnId)) continue;
+			declare SpawnLandmark <=> MapLandmarks_PlayerSpawn[SpawnId];
 			declare Color	= UpscaleColor(Color::GetNewColor());
 			declare Color1	= GetColorizeColor(Color);
 			declare Color2	= GetColorizeColor(DarkenColor(Color, 0.7));
 
 			G_DefaultMarkers ^= """
-<marker box="0 1 0" visibility="WhenVisible" manialinkframeid="Frame_Portal_{{{Pole.Id}}}"
-	pos="{{{Tools::GetPosn(Pole.Position + <0., 1., 0.>)}}}"/>
-<marker box="0 0.5 0" visibility="WhenVisible" manialinkframeid="Frame_Portal__{{{Pole.Id}}}"
-	pos="{{{Tools::GetPosn(Spawn.Position + <2.+Spawn.DirFront.X, 2.*Spawn.DirFront.Y+3., 2.*Spawn.DirFront.Z>)}}}"/>""";
+<marker box="0 1 0" visibility="WhenVisible" manialinkframeid="Frame_Portal_{{{GaugeLandmark.Id}}}"
+	pos="{{{Tools::GetPosn(GaugeLandmark.Position + <0., 1., 0.>)}}}"/>
+<marker box="0 0.5 0" visibility="WhenVisible" manialinkframeid="Frame_Portal__{{{GaugeLandmark.Id}}}"
+	pos="{{{Tools::GetPosn(SpawnLandmark.Position + <2. /*+ SpawnLandmark.DirFront.X*/, /*2. * SpawnLandmark.DirFront.Y +*/ 3., 0./*2. * SpawnLandmark.DirFront.Z*/>)}}}"/>""";
 
 			G_DefaultMarkerFrames ^= """
-<frame id="Frame_Portal_{{{Pole.Id}}}" hidden="1">
+<frame id="Frame_Portal_{{{GaugeLandmark.Id}}}" hidden="1">
 	<frame id="Content" hidden="1">
 		<quad sizen="5.5 9" colorize="{{{Color1}}}" halign="center" valign="center2" image="{{{PortalImageUrl}}}"/>
 	</frame>
 </frame>
-<frame id="Frame_Portal__{{{Pole.Id}}}" hidden="1">
+<frame id="Frame_Portal__{{{GaugeLandmark.Id}}}" hidden="1">
 	<frame id="Content" hidden="1">
 		<quad sizen="5.5 9" colorize="{{{Color2}}}" halign="center" valign="center2" image="{{{PortalImageUrl}}}"/>
 	</frame>
 </frame>""";
 		}
 	}
-	foreach (Spawn in BlockSpawns) {
-		if (TextLib::SubString(Spawn.Tag, 0, 5) != "Spawn") continue;
-		G_StartSpawnId = Spawn.Id;
+	foreach (SpawnLandmark in MapLandmarks_PlayerSpawn) {
+		if (TextLib::SubString(SpawnLandmark.Tag, 0, 5) != "Spawn") continue;
+		G_StartSpawnId = SpawnLandmark.Id;
 		break;
 	}
 	
@@ -1155,10 +1156,10 @@ Void PrepareMap() {
 	CPTimes::SetNbCheckpoints(G_CheckpointsTotal + 1);
 	CPTimes::ResetTimes();
 	
-	if (!BlockSpawns.existskey(G_StartSpawnId)) {
+	if (!MapLandmarks_PlayerSpawn.existskey(G_StartSpawnId)) {
 		// Error in map
-		log("ERROR: No start spawn on this map!");
-		UIManager.UIAll.SendChat("$f00ERROR: No start spawn on this map!");
+		log("ERROR: No Start Spawn on this Map!");
+		UIManager.UIAll.SendChat("$f00ERROR: No Start Spawn on this Map!");
 		MB_StopMap = True;
 	}
 }
@@ -1618,7 +1619,7 @@ Void RestartPlayer(CSmPlayer _Player, Boolean _FullRestart, Boolean _Jump) {
 			// Respawn at last checkpoint
 			declare LastCheckpointId for _Player = NullId;
 			declare CPSpawnId = GetClosestSpawn(LastCheckpointId);
-			if (BlockSpawns.existskey(CPSpawnId)) {
+			if (MapLandmarks_PlayerSpawn.existskey(CPSpawnId)) {
 				// CPSpawn found
 				declare RespawnCount for _Player = 0;
 				RespawnCount += 1;
@@ -1626,7 +1627,7 @@ Void RestartPlayer(CSmPlayer _Player, Boolean _FullRestart, Boolean _Jump) {
 				UpdateCustom2(_Player);
 				UpdateFooterScore(_Player);
 				
-				SM::SpawnPlayer(_Player, 0, BlockSpawns[CPSpawnId], Now + Delay);
+				SM::SpawnPlayer(_Player, 0, MapLandmarks_PlayerSpawn[CPSpawnId].PlayerSpawn, Now + Delay);
 				
 				if (S_FullAmmoSpawn) {
 					FillUpPlayerAmmo(_Player);
@@ -1647,17 +1648,19 @@ Void RestartPlayer(CSmPlayer _Player, Boolean _FullRestart, Boolean _Jump) {
 	declare LastCheckpointId for _Player = NullId;
 	declare netwrite Boolean Net_UsedJump for _Player;
 	
-	// Set weapon type
-	declare WeaponType = 0;
-	declare SpawnName = BlockSpawns[G_StartSpawnId].Tag;
-	if (TextLib::Length(SpawnName) > 5) {
-		WeaponType = TextLib::ToInteger(TextLib::SubString(SpawnName, 9, 1));
-	}
-	ApplyWeaponType(_Player, WeaponType);
-	
 	// Spawn player
-	if (BlockSpawns.existskey(G_StartSpawnId)) {
-		SM::SpawnPlayer(_Player, 0, BlockSpawns[G_StartSpawnId], Now + Delay);
+	if (MapLandmarks_PlayerSpawn.existskey(G_StartSpawnId)) {
+		declare SpawnLandmark <=> MapLandmarks_PlayerSpawn[G_StartSpawnId];
+		
+		// Set weapon type
+		declare WeaponType = 0;
+		declare SpawnName = SpawnLandmark.Tag;
+		if (TextLib::Length(SpawnName) > 5) {
+			WeaponType = TextLib::ToInteger(TextLib::SubString(SpawnName, 9, 1));
+		}
+		ApplyWeaponType(_Player, WeaponType);
+		
+		SM::SpawnPlayer(_Player, 0, SpawnLandmark.PlayerSpawn, Now + Delay);
 		if (S_FullAmmoSpawn) {
 			FillUpPlayerAmmo(_Player);
 		}
@@ -2030,12 +2033,12 @@ Void UpdateAutoTarget(Ident _SpecTargetId) {
 
 // Player enters portal
 Void UsePortal(CSmPlayer _Player, Ident _PoleId) {
-	if (_Player == Null || !BlockPoles.existskey(_PoleId)) return;
+	if (_Player == Null || !MapLandmarks_Gauge.existskey(_PoleId)) return;
 	declare SpawnId = GetClosestSpawn(_PoleId);
-	if (!BlockSpawns.existskey(SpawnId)) return;
+	if (!MapLandmarks_PlayerSpawn.existskey(SpawnId)) return;
 	
 	// Portal exit found - Port player
-	SM::SpawnPlayer(_Player, 0, BlockSpawns[SpawnId]);
+	SM::SpawnPlayer(_Player, 0, MapLandmarks_PlayerSpawn[SpawnId].PlayerSpawn);
 	
 	// Send message
 	declare LastStatusMessage for _Player = 0;
@@ -2046,10 +2049,10 @@ Void UsePortal(CSmPlayer _Player, Ident _PoleId) {
 
 // A player reaches a checkpoint
 Void ActivateCheckpoint(CSmPlayer _Player, Ident _CheckpointId) {
-	if (_Player == Null || _Player.Score == Null || !BlockPoles.existskey(_CheckpointId)) return;
+	if (_Player == Null || _Player.Score == Null || !MapLandmarks_Gauge.existskey(_CheckpointId)) return;
 	declare CheckpointsTimeLast for _Player.Score = Integer[Ident];
-	if (CheckpointsTimeLast.existskey(_CheckpointId) 
-		|| (BlockPoles[_CheckpointId].Order != 0 && BlockPoles[_CheckpointId].Order != CheckpointsTimeLast.count + 1)) return;
+	declare GaugeLandmark <=> MapLandmarks_Gauge[_CheckpointId];
+	if (CheckpointsTimeLast.existskey(_CheckpointId) || (GaugeLandmark.Order != 0 && GaugeLandmark.Order != CheckpointsTimeLast.count + 1)) return;
 	declare LastCheckpointId for _Player = NullId;
 	declare netwrite Net_StartTime for _Player = 0;
 	declare netwrite Integer Net_CPProgress for _Player;
@@ -2075,7 +2078,7 @@ Void ActivateCheckpoint(CSmPlayer _Player, Ident _CheckpointId) {
 	UpdateRanking();
 	
 	// Special checkpoints
-	declare CheckpointName = BlockPoles[_CheckpointId].Tag;
+	declare CheckpointName = GaugeLandmark.Tag;
 	if (TextLib::Length(CheckpointName) > 10) {
 		declare TypeString = TextLib::SubString(CheckpointName, 14, 1);
 		switch (TypeString) {
