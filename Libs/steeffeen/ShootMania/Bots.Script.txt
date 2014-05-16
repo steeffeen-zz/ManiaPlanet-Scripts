@@ -96,7 +96,7 @@ Void Load() {
 	Unload();
 	
 	// Init values
-	DbgEnableNavMesh = True;
+	ForceNavMapsComputation = True;
 	SetPower(1.);
 }
 
@@ -120,9 +120,9 @@ Void Private_InitDriver(CSmPlayer _Player) {
 Void Private_CarryObject(CSmPlayer _Player) {
 	if (_Player == Null || _Player.Driver == Null) return;
 	_Player.Driver.AttackFilter = CSmPlayerDriver::ESmAttackFilter::Nobody;
-	foreach (Pole in BlockPoles) {
-		if (Pole.Gauge.Clan == _Player.CurrentClan && Pole.Gauge.ValueReal < 1.) {
-			_Player.Driver.Saunter_AnchorPoint = Pole.Position;
+	foreach (GaugeLandmark in MapLandmarks_Gauge) {
+		if (GaugeLandmark.Gauge.Clan == _Player.CurrentClan && GaugeLandmark.Gauge.ValueReal < 1.) {
+			_Player.Driver.Saunter_AnchorPoint = GaugeLandmark.Position;
 			_Player.Driver.Saunter_Radius = 2.;
 			break;
 		}
@@ -146,18 +146,16 @@ Void Private_PursuitObject(CSmPlayer _Player, CSmObject _Object) {
 	}
 }
 
-Void Private_GetObject(CSmPlayer _Player, CSmObject _Object) {
-	if (_Player == Null || _Player.Driver == Null || _Object == Null) return;
-	_Player.Driver.AttackFilter = CSmPlayerDriver::ESmAttackFilter::AllOpposite;
-	_Player.Driver.Saunter_AnchorPoint = _Object.Position;
-	_Player.Driver.Saunter_Radius = 2.;
-}
-
 Void Private_RunToPoint(CSmPlayer _Player, Vec3 _Point) {
 	if (_Player == Null || _Player.Driver == Null) return;
 	_Player.Driver.AttackFilter = CSmPlayerDriver::ESmAttackFilter::AllOpposite;
 	_Player.Driver.Saunter_AnchorPoint = _Point;
 	_Player.Driver.Saunter_Radius = 2.;
+}
+
+Void Private_GetObject(CSmPlayer _Player, CSmObject _Object) {
+	if (_Object == Null) return;
+	Private_RunToPoint(_Player, _Object.Position);
 }
 
 // Update targets of the bots
@@ -188,7 +186,7 @@ Void Loop() {
 						Private_GetObject(Player, TargetObject);
 					}
 				}
-				return;
+				continue;
 			}
 		}
 		
