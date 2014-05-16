@@ -33,14 +33,14 @@
 #Setting	S_EnableRoundRespawn	False	as _("Enable Respawning during Rounds")
 #Setting	S_FriendlyFire			False	as _("Friendly-Fire (Team Damage)")
 
-#Setting	S_NbBotsPerTeam			2		as "<hidden>"
+#Setting	S_NbBotsPerTeam			0		as "<hidden>"
 
 
 /****************************************
 	CONSTANTS
 ****************************************/
 
-#Const	Version					"0.07 (2013-12-15)"
+#Const	Version					"0.08 (2014-05-17)"
 #Const	ScriptName				"Defusing.Script.txt"
 #Const	CompatibleMapTypes		"DefusingArena"
 
@@ -210,7 +210,7 @@ foreach (Event in PendingEvents) {
 		}
 		case CSmModeEvent::EType::OnCapture: {
 			// Bomb has been planted
-			G_BombCarrierId = Event.BlockPole.Id;
+			G_BombCarrierId = Event.Landmark.Id;
 			EndTime = MathLib::NearestInteger(Now + S_BombExplosionTime * 1000.);
 			PassOn(Event);
 		}
@@ -223,22 +223,22 @@ foreach (Event in PendingEvents) {
 
 // Manage poles
 foreach (PoleId in G_BombPoleIds) {
-	declare Pole <=> BlockPoles[PoleId];
+	declare GaugeLandmark <=> MapLandmarks_Gauge[PoleId];
 	
-	if (BlockPoles.existskey(G_BombCarrierId)) {
+	if (MapLandmarks_Gauge.existskey(G_BombCarrierId)) {
 		// Bomb has been activated
 		
 		if (PoleId != G_BombCarrierId) {
 			// On another pole...
-			Pole.Gauge.Speed = 0;
-			Pole.Gauge.Value = 0;
+			GaugeLandmark.Gauge.Speed = 0;
+			GaugeLandmark.Gauge.Value = 0;
 			continue;
 		}
 		
 		declare Defusing = False;
 		
 		// Loop through capturing players
-		foreach (PlayerId in Pole.Sector.PlayersIds) {
+		foreach (PlayerId in GaugeLandmark.Sector.PlayersIds) {
 			declare Player <=> Players[PlayerId];
 			
 			if (Player.CurrentClan == G_AttackingClan) {
@@ -253,17 +253,17 @@ foreach (PoleId in G_BombPoleIds) {
 		
 		if (Defusing) {
 			// Being defused!
-			if (Pole.Gauge.ValueReal <= 0.) {
+			if (GaugeLandmark.Gauge.ValueReal <= 0.) {
 				// Completely defused!
 				Victory::SetRoundWinnerIfNoWinner(3-G_AttackingClan);
 			}
-			Pole.Gauge.Speed = -MathLib::NearestInteger(Pole.Gauge.Max / (S_ActivationTime * S_DefusingTimeFactor * 1000.));
+			GaugeLandmark.Gauge.Speed = -MathLib::NearestInteger(GaugeLandmark.Gauge.Max / (S_ActivationTime * S_DefusingTimeFactor * 1000.));
 			continue;
 		}
 		
 		// Not defusing
-		Pole.Gauge.Speed = 0;
-		Pole.Gauge.Value = Pole.Gauge.Max;
+		GaugeLandmark.Gauge.Speed = 0;
+		GaugeLandmark.Gauge.Value = GaugeLandmark.Gauge.Max;
 		continue;
 	}
 	
@@ -271,7 +271,7 @@ foreach (PoleId in G_BombPoleIds) {
 	declare Activating = False;
 	
 	// Loop through capturing players
-	foreach (PlayerId in Pole.Sector.PlayersIds) {
+	foreach (PlayerId in GaugeLandmark.Sector.PlayersIds) {
 		declare Player <=> Players[PlayerId];
 		
 		if (Player.CurrentClan != G_AttackingClan) {
@@ -290,13 +290,13 @@ foreach (PoleId in G_BombPoleIds) {
 	
 	if (Activating) {
 		// Being activated!
-		Pole.Gauge.Speed = MathLib::NearestInteger(Pole.Gauge.Max / (S_ActivationTime * 1000.));
+		GaugeLandmark.Gauge.Speed = MathLib::NearestInteger(GaugeLandmark.Gauge.Max / (S_ActivationTime * 1000.));
 		continue;
 	}
 	
 	// Not activating
-	Pole.Gauge.Speed = 0;
-	Pole.Gauge.Value = 0;
+	GaugeLandmark.Gauge.Speed = 0;
+	GaugeLandmark.Gauge.Value = 0;
 }
 
 // Manage bomb
@@ -322,25 +322,25 @@ if (G_BombCarrierId == NullId) {
 
 // Round end conditions
 if (Now >= EndTime) {
-	if (BlockPoles.existskey(G_BombCarrierId)) {
+	if (MapLandmarks_Gauge.existskey(G_BombCarrierId)) {
 		// Bomb exploded
 		Victory::SetRoundWinnerIfNoWinner(G_AttackingClan);
 	} else {
 		// Attackers didn't set bomb
-		Victory::SetRoundWinnerIfNoWinner(3-G_AttackingClan);
+		Victory::SetRoundWinnerIfNoWinner(3 - G_AttackingClan);
 	}
 } else {
 	foreach (Clan => Team in Teams) {
-		if (ClansNbPlayers[Clan+1] <= 0 || ClansNbPlayersAlive[Clan+1] > 0) {
+		if (ClansNbPlayers[Clan + 1] <= 0 || ClansNbPlayersAlive[Clan + 1] > 0) {
 			// No players in the team or not all of them eliminated yet
 			continue;
 		}
 		// Whole team has been eliminated
-		if (Clan+1 == G_AttackingClan && BlockPoles.existskey(G_BombCarrierId)) {
+		if (Clan+1 == G_AttackingClan && MapLandmarks_Gauge.existskey(G_BombCarrierId)) {
 			// Bomb is already planted, Defense still has to defuse
 			continue;
 		}
-		Victory::SetRoundWinnerIfNoWinner(2-Clan);
+		Victory::SetRoundWinnerIfNoWinner(2 - Clan);
 		break;
 	}
 }
@@ -416,50 +416,50 @@ Void MySpawnPlayer(CSmPlayer _Player) {
 	// Find a spawn block for the player
 	declare SpawnIds = G_ClanSpawnIds[_Player.RequestedClan];
 	declare SpawnId = SpawnIds[MathLib::Rand(0, SpawnIds.count-1)];
-	declare Spawn <=> BlockSpawns[SpawnId];
+	declare SpawnLandmark <=> MapLandmarks_PlayerSpawn[SpawnId];
 	
 	// Spawn the player in its desired team
-	SM::SpawnPlayer(_Player, _Player.RequestedClan, Spawn, StartTime);
+	SM::SpawnPlayer(_Player, _Player.RequestedClan, SpawnLandmark.PlayerSpawn, StartTime);
 }
 
 // Load and prepare map for the match
 Void PrepareMap() {
 	// Turn lights on
-	foreach (Base in Bases) {
+	foreach (Base in MapBases) {
 		Base.IsActive = True;
 		Base.Clan = 0;
 	}
 	
 	// Save team spawns
 	G_ClanSpawnIds.clear();
-	foreach (Spawn in BlockSpawns) {
-		if (Spawn.Order != 1 && Spawn.Order != 2) {
+	foreach (SpawnLandmark in MapLandmarks_PlayerSpawn) {
+		if (SpawnLandmark.Order != 1 && SpawnLandmark.Order != 2) {
 			// No team spawn
 			continue;
 		}
 		
-		if (!G_ClanSpawnIds.existskey(Spawn.Order)) {
+		if (!G_ClanSpawnIds.existskey(SpawnLandmark.Order)) {
 			// Init spawns array
-			G_ClanSpawnIds[Spawn.Order] = Ident[];
+			G_ClanSpawnIds[SpawnLandmark.Order] = Ident[];
 		}
 		
 		// Save spawn id in array of its order
-		G_ClanSpawnIds[Spawn.Order].add(Spawn.Id);
+		G_ClanSpawnIds[SpawnLandmark.Order].add(SpawnLandmark.Id);
 	}
 	
 	// Save bomb spots
 	G_BombPoleIds.clear();
-	foreach (Pole in BlockPoles) {
-		if (Pole.Tag != "A" && Pole.Tag != "B" && Pole.Tag != "C") {
+	foreach (GaugeLandmark in MapLandmarks_Gauge) {
+		if (GaugeLandmark.Tag != "A" && GaugeLandmark.Tag != "B" && GaugeLandmark.Tag != "C") {
 			// No bomb spot
 			continue;
 		}
 		
 		// Init values
-		Pole.Gauge.Max = 100000;
+		GaugeLandmark.Gauge.Max = 100000;
 		
 		// Add pole to bomb spots
-		G_BombPoleIds.add(Pole.Id);
+		G_BombPoleIds.add(GaugeLandmark.Id);
 	}
 	
 	// Reset attacking team
@@ -500,24 +500,24 @@ Void PrepareRound() {
 	// Prepare spawns
 	foreach (Order => SpawnIds in G_ClanSpawnIds) {
 		foreach (SpawnId in SpawnIds) {
-			declare Spawn <=> BlockSpawns[SpawnId];
+			declare SpawnLandmark <=> MapLandmarks_PlayerSpawn[SpawnId];
 			
 			// Set team color
-			Spawn.Base.Clan = Order;
+			SpawnLandmark.Base.Clan = Order;
 		}
 	}
 	
 	// Prepare poles
 	foreach (PoleId in G_BombPoleIds) {
-		declare Pole <=> BlockPoles[PoleId];
+		declare GaugeLandmark <=> MapLandmarks_Gauge[PoleId];
 		
 		// Set team color
-		Pole.Base.Clan = G_AttackingClan;
-		Pole.Gauge.Clan = G_AttackingClan;
+		GaugeLandmark.Base.Clan = G_AttackingClan;
+		GaugeLandmark.Gauge.Clan = G_AttackingClan;
 		
 		// Reset capture progress
-		Pole.Gauge.Speed = 0;
-		Pole.Gauge.Value = 0;
+		GaugeLandmark.Gauge.Speed = 0;
+		GaugeLandmark.Gauge.Value = 0;
 	}
 	
 	// Find and assign bomb carrier for the next round
@@ -565,8 +565,8 @@ Void PrepareRound() {
 		// No player available - Drop the bomb in an attack spawn
 		declare SpawnIds = G_ClanSpawnIds[G_AttackingClan];
 		declare SpawnId = SpawnIds[MathLib::Rand(0, SpawnIds.count-1)];
-		declare Spawn <=> BlockSpawns[SpawnId];
-		G_BombDropPosition = Spawn.Position;
+		declare SpawnLandmark <=> MapLandmarks_PlayerSpawn[SpawnId];
+		G_BombDropPosition = SpawnLandmark.Position;
 	}
 }
 
