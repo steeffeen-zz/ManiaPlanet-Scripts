@@ -13,7 +13,7 @@
 	CONSTANTS
 ***************************************/
 
-#Const	Version		"2013-08-25*"
+#Const	Version		"2013-08-25"
 #Const	ScriptName	"ObstacleSpawnScreen.Script.txt"
 
 #Const	C_Icons		[	"Gold", "Silver", "Bronze"	]

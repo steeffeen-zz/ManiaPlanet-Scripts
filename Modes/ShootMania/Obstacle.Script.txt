@@ -10,7 +10,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const ScriptName				"Obstacle.Script.txt"
-#Const Version					"2.1 (2014-04-27)"
+#Const Version					"2.2 (2014-05-17)"
 #Const CompatibleMapTypes		"ObstacleArena,ObstacleTitleArena,TimeAttackArena"
 
 /*********************************************
@@ -20,11 +20,11 @@
 #Include "MathLib" as MathLib
 #Include "TextLib" as TextLib
 #Include "Libs/Nadeo/Color.Script.txt" as Color
+#Include "Libs/Nadeo/CustomUI.Script.txt" as CustomUI
 #Include "Libs/Nadeo/Json.Script.txt" as Json
 #Include "Libs/Nadeo/Message.Script.txt" as Message
 #Include "Libs/Nadeo/TabsServer.Script.txt" as Tabs
 #Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
-#Include "Libs/Nadeo/ShootMania/ScoresTable.Script.txt" as ScoresTables
 #Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
 #Include "Libs/steeffeen/CheckpointTimes.Script.txt" as CPTimes
 #Include "Libs/steeffeen/MiniMap.Script.txt" as MiniMap
@@ -44,6 +44,7 @@
 #Setting	S_DisablePlayerSpec		False	as _("Disable spectating of other Players during a Run")
 
 #Setting	S_NextMapVotingRatio	0.7		as "<hidden>"		// Ratio needed for the next map voting
+#Setting	S_UseSameWallJump		True	as "<hidden>"		// Use old wall jump physics
 
 /*********************************************
 	CONSTANTS
@@ -54,6 +55,17 @@
 
 #Const	T_ItemOffzone		"Obstacle\\OffzoneShield.Item.gbx"
 #Const	T_ItemAmmo			"Obstacle\\Ammo.Item.gbx"
+
+#Const	C_Module_Items				"Obstacle_ItemsModule"
+#Const	C_Module_ItemsInfo			"Obstacle_ItemsInfoModule"
+#Const	C_Module_RestartKey			"Obstacle_RestartKeyModule"
+#Const	C_Module_CPProgress			"Obstacle_CPProgress"
+#Const	C_Module_RespawnBehavior	"Obstacle_RespawnBehavior"
+#Const	C_Module_NextMapVoting		"Obstacle_NextMapVoting"
+#Const	C_Module_SpectateCount		"Obstacle_SpectateCount"
+#Const	C_Module_Chrono				"Obstacle_Chrono"
+#Const	C_Module_TimeRankInfo		"Obstacle_TimeRankInfo"
+#Const	C_Module_TimeDiff			"Obstacle_TimeDiff"
 
 #Const	Description		_("Finish difficult Obstacle Courses as fast as possible.\nImprove Your Movement Skills and become the Champion.")
 
@@ -77,7 +89,8 @@ declare	Ident[Text]	G_ItemIdents;				// Idents of loaded items
 ***LogVersion***
 ***
 MB_LogVersion(ScriptName, Version);
-MB_LogVersion(AFK::GetScriptName(), AFK::GetScriptVersion());
+MB_LogVersion(Color::GetScriptName(), Color::GetScriptVersion());
+MB_LogVersion(CustomUI::GetScriptName(), CustomUI::GetScriptVersion());
 MB_LogVersion(Json::GetScriptName(), Json::GetScriptVersion());
 MB_LogVersion(Message::GetScriptName(), Message::GetScriptVersion());
 MB_LogVersion(ScoresTable::GetScriptName(), ScoresTable::GetScriptVersion());
@@ -298,8 +311,6 @@ ItemList_End();
 Color::Load();
 Records::Load(G_Solo);
 
-//Users_SetNbFakeUsers(5,0);
-
 // Set mode options
 UsePvPCollisions = False;
 UsePvPWeapons = S_PvPWeapons;
@@ -340,6 +351,20 @@ UIManager.UIAll.UILayers.add(LayerItems);
 
 // MiniMap
 MiniMap::Load();
+
+// Custom UI
+CustomUI::Load();
+CustomUI::Add(C_Module_Items, <0., -65.>, <80., 40.>, "bottom", "center");
+CustomUI::Add(C_Module_ItemsInfo, <0., 40.>, <110., 10.>);
+CustomUI::Add(C_Module_RestartKey, <95., -87.>, <30., 5.>);
+CustomUI::Add(C_Module_CPProgress, <-47., -78.>, <40., 5.>);
+CustomUI::Add(C_Module_RespawnBehavior, <-20., 88.>, <40., 4.>, "center", "right");
+CustomUI::Add(C_Module_NextMapVoting, <20., 88.>, <60., 4.>, "center", "left");
+CustomUI::Add(C_Module_SpectateCount, <159., -63.>, <20., 8.>, "center", "right");
+CustomUI::Add(C_Module_Chrono, <50., -73.>, <40., 10.>);
+CustomUI::Add(C_Module_TimeRankInfo, <159., -89.>, <40., 20.>, "bottom", "right");
+CustomUI::Add(C_Module_TimeDiff, <0., 65.>, <60., 12.>);
+CustomUI::Build();
 ***
 
 ***StartMap***
@@ -798,6 +823,7 @@ SpawnScreen::DestroyRules();
 SpawnScreen::DestroyMapInfo();
 ObstSpawnScreen::DestroyScores();
 MiniMap::Unload();
+CustomUI::Unload();
 Records::Unload();
 UIManager.UILayerDestroyAll();
 ***
@@ -834,6 +860,9 @@ Void CheckScriptSettings() {
 			UIManager.UIAll.SendChat("$<$f80PvP Weapons$> are now $<$f00disabled$>!");
 		}
 	}
+	
+	// Wall jumps
+	UseSameWallJump = S_UseSameWallJump;
 }
 
 // Check if the given pole is a valid checkpoint
@@ -1217,11 +1246,11 @@ Text CreateLayerInfo() {
 		main() {
 			wait(InputPlayer != Null && Page != Null);
 			
-			declare Frame_Info			<=> (Page.GetFirstChild("Frame_Info") as CMlFrame);
-			declare Label_PosTotal		<=> (Frame_Info.GetFirstChild("Label_PosTotal") as CMlLabel);
-			declare Label_PosCurrent	<=> (Frame_Info.GetFirstChild("Label_PosCurrent") as CMlLabel);
-			declare Label_BestTime		<=> (Frame_Info.GetFirstChild("Label_BestTime") as CMlLabel);
-			declare Label_PrevTime		<=> (Frame_Info.GetFirstChild("Label_PrevTime") as CMlLabel);
+			declare Frame_TimeRankInfo	<=> (Page.GetFirstChild("Frame_TimeRankInfo") as CMlFrame);
+			declare Label_PosTotal		<=> (Frame_TimeRankInfo.GetFirstChild("Label_PosTotal") as CMlLabel);
+			declare Label_PosCurrent	<=> (Frame_TimeRankInfo.GetFirstChild("Label_PosCurrent") as CMlLabel);
+			declare Label_BestTime		<=> (Frame_TimeRankInfo.GetFirstChild("Label_BestTime") as CMlLabel);
+			declare Label_PrevTime		<=> (Frame_TimeRankInfo.GetFirstChild("Label_PrevTime") as CMlLabel);
 			
 			declare Frame_Chrono		<=> (Page.GetFirstChild("Frame_Chrono") as CMlFrame);
 			declare Label_Chrono		<=> (Frame_Chrono.GetFirstChild("Label_Chrono") as CMlLabel);
@@ -1234,10 +1263,13 @@ Text CreateLayerInfo() {
 			declare BestTime = -2;
 			declare PrevTime = -2;
 			declare LastUpdate = 0;
-			declare PrevIsSpectatorMode = False;
+			
+			{{{CustomUI::InjectMLInit()}}}
 			
 			while (True) {
 				yield;
+				
+				if (!PageIsVisible) continue;
 				
 				declare LocalPlayer <=> InputPlayer;
 				if (GUIPlayer != Null) LocalPlayer <=> GUIPlayer;
@@ -1264,29 +1296,14 @@ Text CreateLayerInfo() {
 				LastUpdate = Now;
 				
 				// Info at bottom right
-				if (IsSpectatorMode != PrevIsSpectatorMode) {
-					PrevIsSpectatorMode = IsSpectatorMode;
-					if (IsSpectatorMode) {
-						Frame_Info.Hide();
-					} else {
-						Frame_Info.Show();
-					}
+				Frame_TimeRankInfo.Visible = !IsSpectatorMode;
+				if (PosTotal != Scores.count) {
+					PosTotal = Scores.count;
+					Label_PosTotal.Value = "/"^PosTotal;
 				}
-				
-				if (Scores.count <= 1) {
-					Label_PosCurrent.Hide();
-					Label_PosTotal.Hide();
-				} else {
-					if (PosTotal != Scores.count) {
-						PosTotal = Scores.count;
-						Label_PosTotal.SetText("$s/"^PosTotal);
-						Label_PosTotal.Show();
-					}
-					if (InputPlayer != Null && PosCurrent != Scores.keyof(InputPlayer.Score)) {
-						PosCurrent = Scores.keyof(InputPlayer.Score);
-						Label_PosCurrent.SetText(TextLib::ToText(PosCurrent + 1));
-						Label_PosCurrent.Show();
-					}
+				if (Scores.exists(InputPlayer.Score) && PosCurrent != Scores.keyof(InputPlayer.Score)) {
+					PosCurrent = Scores.keyof(InputPlayer.Score);
+					Label_PosCurrent.Value = TextLib::ToText(PosCurrent + 1);
 				}
 				
 				if (BestTime != Net_BestTime) {
@@ -1297,7 +1314,7 @@ Text CreateLayerInfo() {
 					} else {
 						BestTimeString = TextLib::Compose(_("|Best result|Best: %1"), TextLib::TimeToText(BestTime, True));
 					}
-					Label_BestTime.SetText(BestTimeString);
+					Label_BestTime.Value = BestTimeString;
 				}
 				
 				if (PrevTime != Net_PrevTime) {
@@ -1308,20 +1325,26 @@ Text CreateLayerInfo() {
 					} else {
 						PrevTimeString = TextLib::Compose(_("|Previous result|Previous: %1"), TextLib::TimeToText(PrevTime, True));
 					}
-					Label_PrevTime.SetText(PrevTimeString);
+					Label_PrevTime.Value = PrevTimeString;
 				}
+				
+				{{{CustomUI::InjectMLLoop()}}}
 			}
 		}
 	--></script>
-	<frame id="Frame_Info" posn="159 -89">
-		<label id="Label_PosTotal" posn="-7 12" halign="left" valign="bottom" textemboss="1"/>
-		<label id="Label_PosCurrent" posn="-7 11" halign="right" valign="bottom" style="TextRaceChrono"/>
-		<label id="Label_BestTime" posn="-2 7" sizen="40 6" halign="right" valign="bottom" textprefix="$s"/>
-		<label id="Label_PrevTime" posn="-2 1" sizen="40 6" halign="right" valign="bottom" textprefix="$s"/>
+	<frame id="{{{C_Module_TimeRankInfo}}}" class="LibCustomUI_Module">
+		<frame id="Frame_TimeRankInfo" posn="159 -89">
+			<label id="Label_PosTotal" posn="-7 11" halign="left" valign="bottom" textemboss="1"/>
+			<label id="Label_PosCurrent" posn="-7 10" halign="right" valign="bottom" style="TextRaceChrono"/>
+			<label id="Label_BestTime" posn="-2 6" sizen="40 6" halign="right" valign="bottom" textemboss="1"/>
+			<label id="Label_PrevTime" posn="-2 0" sizen="40 6" halign="right" valign="bottom" textemboss="1"/>
+		</frame>
 	</frame>
-	<frame id="Frame_Chrono" posn="50 -73" hidden="1">
-		<label id="Label_Chrono" posn="0 -0.9 1" style="TextRaceChrono" halign="center" valign="center2"/>
-		<quad posn="0 0" sizen="40 10" style="BgsPlayerCard" substyle="BgPlayerCard" halign="center" valign="center2"/>
+	<frame id="{{{C_Module_Chrono}}}" class="LibCustomUI_Module">
+		<frame id="Frame_Chrono" posn="50 -73" hidden="1">
+			<label id="Label_Chrono" posn="0 -0.9 1" sizen="40 10" style="TextRaceChrono" halign="center" valign="center2"/>
+			<quad posn="0 0" sizen="40 10" style="BgsPlayerCard" substyle="BgPlayerCard" halign="center" valign="center2"/>
+		</frame>
 	</frame>""";
 }
 
@@ -1356,6 +1379,8 @@ Text CreateLayerTimeDiff() {
 			
 			while (True) {
 				yield;
+				
+				if (!PageIsVisible) continue;
 				
 				if (ShowTimeDiff && LayerTimeDiffUpdated + 3000 < ArenaNow) {
 					ShowTimeDiff = False;
@@ -1396,9 +1421,11 @@ Text CreateLayerTimeDiff() {
 			}
 		}
 	--></script>
-	<frame id="Frame_TimeDiff" posn="0 65 10">
-		<label id="Label_Time" posn="-0.5 0" scale="1.5" halign="right" valign="center2"/>
-		<label id="Label_Diff" posn="0.5 0" scale="1.1" halign="left" valign="center2"/>
+	<frame id="{{{C_Module_TimeDiff}}}" class="LibCustomUI_Module">
+		<frame id="Frame_TimeDiff" posn="0 65 10">
+			<label id="Label_Time" posn="-0.5 0" scale="1.5" halign="right" valign="center2"/>
+			<label id="Label_Diff" posn="0.5 0" scale="1.1" halign="left" valign="center2"/>
+		</frame>
 	</frame>""";
 }
 
@@ -1742,6 +1769,8 @@ Text CreateLayerUtilities() {
 			
 			declare LastUIUpdate = 0;
 			
+			{{{CustomUI::InjectMLInit()}}}
+			
 			while (True) {
 				yield;
 				
@@ -1752,7 +1781,7 @@ Text CreateLayerUtilities() {
 				// Spec count
 				declare _TabsLib_ScoresLayerIsVisible for UI = False;
 				declare _TabsLib_AltLayerIsVisible for UI = False;
-				Frame_SpectateCount.Visible = _TabsLib_ScoresLayerIsVisible || _TabsLib_AltLayerIsVisible;
+				Frame_SpectateCount.Visible = (_TabsLib_ScoresLayerIsVisible || _TabsLib_AltLayerIsVisible);
 				if (Frame_SpectateCount.Visible) {
 					declare netread Net_NbSpectating for LocalPlayer = 0;
 					Label_SpectateCount.Value = TextLib::ToText(Net_NbSpectating);
@@ -1881,24 +1910,37 @@ Text CreateLayerUtilities() {
 	Manialink ^= """
 				// Restart key
 				if (ChoosingRestartKey) {
-					Label_Choose.Value = _("Press your key...");
+					Label_Choose.Value = _("Press your Key...");
 				} else {
 					Label_Choose.Value = TextLib::Compose("%1: %2", _("|Restart a run|Restart"), OwnCustomRestartKey);
 				}
+				
+				{{{CustomUI::InjectMLLoop()}}}
 			}
 		}
 	--></script>
 	<label id="Label_Jumped" posn="50 -66" textsize="1" textprefix="$f00" translate="1" halign="center" valign="center2" hidden="1"/>
 	<quad id="Quad_Spec" posn="-57 -54.5" sizen="12 12" style="UIConstruction_Buttons" substyle="Camera" scriptevents="1"
 		halign="center" valign="center2" hidden="1"/>
-	<label id="Label_CPProgress" posn="-47 -78" textsize="1" translate="1" halign="center" valign="center2" hidden="1"/>
-	<label id="Label_RespawnBehavior" posn="-20 88" textsize="1" translate="1" halign="right" valign="center2" hidden="1"/>
-	<label id="Label_NextMapVoting" posn="20 88" sizen="70 3.5" textsize="1" translate="1" halign="left" valign="center2" hidden="1"/>
-	<frame id="Frame_SpectateCount" posn="159 -63" hidden="1">
-		<quad sizen="8 8" style="BgRaceScore2" substyle="Tv" halign="right" valign="center2"/>
-		<label id="Label_SpectateCount" posn="-9 0" style="TextTitle1" textsize="3" text="0" halign="right" valign="center2"/>
+	<frame id="{{{C_Module_CPProgress}}}" class="LibCustomUI_Module">
+		<label id="Label_CPProgress" posn="-47 -78" sizen="40 5" textsize="1" translate="1" halign="center" valign="center2" hidden="1"/>
 	</frame>
-	<label id="Label_Choose" posn="105 -87" halign="center" valign="center" scale="0.7" style="CardButtonSmall" scriptevents="1" hidden="1"/>""";
+	<frame id="{{{C_Module_RespawnBehavior}}}" class="LibCustomUI_Module">
+		<label id="Label_RespawnBehavior" posn="-20 88" sizen="40 4" textsize="1" translate="1" halign="right" valign="center2" hidden="1"/>
+	</frame>
+	<frame id="{{{C_Module_NextMapVoting}}}" class="LibCustomUI_Module">
+		<label id="Label_NextMapVoting" posn="20 88" sizen="60 4" textsize="1" translate="1" halign="left" valign="center2" hidden="1"/>
+	</frame>
+	<frame id="{{{C_Module_SpectateCount}}}" class="LibCustomUI_Module">
+		<frame id="Frame_SpectateCount" posn="159 -63" hidden="1">
+			<quad sizen="8 8" style="BgRaceScore2" substyle="Tv" halign="right" valign="center2"/>
+			<label id="Label_SpectateCount" posn="-9 0" sizen="15 8" style="TextTitle1" textsize="3" text="0" halign="right" valign="center2"/>
+		</frame>
+	</frame>
+	<frame id="{{{C_Module_RestartKey}}}" class="LibCustomUI_Module">
+		<label id="Label_Choose" posn="95 -87" halign="center" valign="center2" scale="0.7" style="CardButtonSmall" scriptevents="1" hidden="1"/>
+	</frame>
+""";
 	return Manialink;
 }
 
@@ -2266,10 +2308,12 @@ Text CreateLayerItems() {
 			declare Last_BuffEnds = Integer[Text];
 			declare Last_BuffDurations = Integer[Text];
 			
+			{{{CustomUI::InjectMLInit()}}}
+			
 			while (True) {
 				yield;
 				
-				if (Last_UIUpdate + 50 > Now) continue;
+				if (!PageIsVisible || Last_UIUpdate + 50 > Now) continue;
 				Last_UIUpdate = Now;
 				
 				declare LocalPlayer <=> InputPlayer;
@@ -2292,11 +2336,11 @@ Text CreateLayerItems() {
 						
 						// Adjust Frame Y
 						declare Source_Y for Frame = -1000.;
-						if (Source_Y <= -1000.) Source_Y = Frame.PosnY;
+						if (Source_Y <= -1000.) Source_Y = Frame.AbsolutePosition.Y;
 						if (LocalPlayer != InputPlayer) {
-							Frame.PosnY = Source_Y + 15.;
+							Frame.RelativePosition.Y = Source_Y + 15.;
 						} else {
-							Frame.PosnY = Source_Y;
+							Frame.RelativePosition.Y = Source_Y;
 						}
 						
 						if (!Last_BuffEnds.existskey(ItemName) || Last_BuffEnds[ItemName] != BuffTime || !Last_BuffDurations.existskey(ItemName)) {
@@ -2337,19 +2381,25 @@ Text CreateLayerItems() {
 					if (Frame == Null) continue;
 					Frame.Visible = False;
 				}
-				Label_Info.Visible = (Last_LabelInfoShown + 15000 > Now);
+				Label_Info.Visible = (Last_LabelInfoShown + 7500 > Now);
+				
+				{{{CustomUI::InjectMLLoop()}}}
 			}
 		}
 		--></script>
-		<label id="Label_Info" posn="0 40" translate="1" halign="center" valign="center2"/>
-		<framemodel id="Model_ItemGauge">
-			<gauge id="Gauge_Item" sizen="80 14" color="1c6b" style="EnergyBar" drawbg="0" drawblockbg="1" halign="center" valign="center2"/>
-			<label id="Label_Time" posn="0 -0.5" style="TextTitle1" textsize="2" halign="center" valign="center2"/>
-			<label id="Label_Item" posn="-36.5 -0.5" style="TextTitle1" textsize="1" translate="1" halign="left" valign="center2"/>
-		</framemodel>""";
+		<frame id="{{{C_Module_ItemsInfo}}}" class="LibCustomUI_Module">
+			<label id="Label_Info" posn="0 40" sizen="110 10" translate="1" halign="center" valign="center2" hidden="1" text="hi"/>
+		</frame>
+		<frame id="{{{C_Module_Items}}}" class="LibCustomUI_Module">
+			<framemodel id="Model_ItemGauge">
+				<gauge id="Gauge_Item" sizen="80 14" color="1c6b" style="EnergyBar" drawbg="0" drawblockbg="1" halign="center" valign="center2"/>
+				<label id="Label_Time" posn="0 -0.5" style="TextTitle1" textsize="2" halign="center" valign="center2"/>
+				<label id="Label_Item" posn="-36.5 -0.5" style="TextTitle1" textsize="1" translate="1" halign="left" valign="center2"/>
+			</framemodel>""";
 	for (Index, 1, ItemCount) {
 		Manialink ^= """<frameinstance id="Frame_ItemGauge{{{Index}}}" posn="0 {{{-65 + Index * 8.3}}} -15" modelid="Model_ItemGauge" hidden="1"/>""";
 	}
+	Manialink ^= """</frame>""";
 	return Manialink;
 }
 

@@ -2,8 +2,8 @@
  * ScoresTable library
  */
 
-#Const Version		"2013-09-13*"
-#Const ScriptName	"ObstacleScoresTable.Script.txt*"
+#Const Version		"2013-09-13"
+#Const ScriptName	"ObstacleScoresTable.Script.txt"
 
 #Include "TextLib" as TL
 
