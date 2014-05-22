@@ -7,8 +7,9 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const	ScriptName			"SpeedBall.Script.txt"
-#Const	Version				"2.3 (2014-05-17)"
+#Const	Version				"2.4 (2014-05-22)"
 #Const	CompatibleMapTypes	"SpeedBallArena,SpeedBallTitleArena"
+
 
 /*****************************************************
 	INCLUDES
@@ -16,6 +17,7 @@
 
 #Include "MathLib" as MathLib
 #Include "TextLib" as TextLib
+#Include "Libs/Nadeo/CustomUI.Script.txt" as CustomUI
 #Include "Libs/Nadeo/Interface.Script.txt" as Interface
 #Include "Libs/Nadeo/Message.Script.txt" as Message
 #Include "Libs/Nadeo/TabsServer.Script.txt" as Tabs
@@ -28,6 +30,7 @@
 #Include "Libs/steeffeen/ShootMania/Bots.Script.txt" as Bots
 #Include "Libs/steeffeen/TeamStats.Script.txt" as TeamStats 
 #Include "Libs/steeffeen/Tools.Script.txt" as Tools
+
 
 /*****************************************************
 	SETTINGS
@@ -57,8 +60,9 @@
 #Setting	S_BotPower					10.		as "<hidden>"		// Power of the bots
 #Setting	S_NbBotsBlue				0		as "<hidden>"		// Number of bots of team blue
 #Setting	S_NbBotsRed					0		as "<hidden>"		// Number of bots of team red
-#Setting	S_ReduceLaserDamage			False	as "<hidden>"		// Reduce laser damage?
-#Setting	S_ChangeBallWeaponVisual	False	as "<hidden>"		// Reduce laser damage?
+#Setting	S_ReduceLaserDamage			False	as "<hidden>"		// Reduce laser damage
+#Setting	S_ChangeBallWeaponVisual	False	as "<hidden>"		// Use alternate ball visual
+
 
 /*****************************************************
 	COMMANDS
@@ -68,6 +72,7 @@
 #Command	Cmd_MapPointsClan2		(Integer)	as _("Set current Map Points of Team 2")
 #Command	Cmd_MatchPointsClan1	(Integer)	as _("Set current Match Points of Team 1")
 #Command	Cmd_MatchPointsClan2	(Integer)	as _("Set current Match Points of Team 2")
+
 
 /*****************************************************
 	CONSTANTS
@@ -91,7 +96,11 @@
 #Const	C_ST_ColId_Damage				"SB.Damage"
 #Const	C_ST_ColId_Passes				"SB.Passes"
 
-#Const	Description			_("$<$oObjective:$> Two teams fight for control of a $<$0f0Ball$> in order to capture the opponents goal post.")
+#Const	Description			_("$<$oObjective:$> Two teams fight for Control of a $<$0f0Ball$> in order to capture the Opponent's Goal Post.")
+
+// Modules
+#Const	C_Module_BallCarrier	"SpeedBall.BallCarrier"
+#Const	C_Module_CaptureBar		"SpeedBall.CaptureBar"
 
 // Warm up
 #Const	C_Clan1				"Clan1"
@@ -111,6 +120,7 @@
 #Const	T_EnemyKills		"EnemyKills"
 #Const	T_TeamKills			"TeamKills"
 
+
 /*****************************************************
 	GLOBALES
 *****************************************************/
@@ -126,6 +136,7 @@ declare	Integer[Integer]		G_LastSpawnIndex;			// Last spawn index of each clan
 declare	Ident[Integer]			G_ClanGaugeLandmarkIds;		// Gauge Landmark Ids of each clan
 declare Real[Integer]			G_MaxCapturePercentage;		// Maximum capture percentage reached by each team during the current round
 
+
 /*****************************************************
 	LABELS
 *****************************************************/
@@ -133,6 +144,7 @@ declare Real[Integer]			G_MaxCapturePercentage;		// Maximum capture percentage r
 ***LogVersion***
 ***
 MB_LogVersion(ScriptName, Version);
+MB_LogVersion(CustomUI::GetScriptName(), CustomUI::GetScriptVersion());
 MB_LogVersion(Interface::GetScriptName(), Interface::GetScriptVersion());
 MB_LogVersion(Message::GetScriptName(), Message::GetScriptVersion());
 MB_LogVersion(Score::GetScriptName(), Score::GetScriptVersion());
@@ -317,6 +329,12 @@ ST2::Build("SM");
 	}
 	TeamStats::BuildManialink();
 }
+
+// CustomUI
+CustomUI::Load();
+CustomUI::Add(C_Module_BallCarrier, <110., -65.>, <55., 8.>);
+CustomUI::Add(C_Module_CaptureBar, <0., -29.>, <110., 20.>);
+CustomUI::Build();
 ***
 
 ***StartMatch***
@@ -436,16 +454,12 @@ LayerMarkers.IsVisible = True;
 LayerExtra.IsVisible = True;
 
 // Initialize values
+G_Phase = 0;
 foreach (BallObjectId in G_BallObjectsIds) {
 	if (!Objects.existskey(BallObjectId)) continue;
 	declare BallObject <=> Objects[BallObjectId];
-	BallObject.SetPositionAndVel(MapLandmarks_Gauge[G_BallLandmarkId].Position, <0., 1., 0.>);
-	declare Integer DropTime for BallObject;
-	DropTime = -1;
-	declare Boolean AtHome for BallObject;
-	AtHome = True;
+	ResetBall(BallObject, False);
 }
-G_Phase = 0;
 UpdateBaseClans();
 G_MaxCapturePercentage = [1 => 0., 2 => 0.];
 
@@ -727,12 +741,14 @@ foreach (Event in PendingEvents) {
 		}
 		case CSmModeEvent::EType::OnPlayerRemoved: {
 			// Player left the game
-			foreach (BallObjectId in G_BallObjectsIds) {
-				if (!Objects.existskey(BallObjectId)) continue;
-				declare BallObject <=> Objects[BallObjectId];
-				declare PlayerId for BallObject = NullId;
-				if (Event.PlayerId == PlayerId) {
-					DropBall(BallObject, Event.PlayerLastPosition);
+			if (Now > StartTime) {
+				foreach (BallObjectId in G_BallObjectsIds) {
+					if (!Objects.existskey(BallObjectId)) continue;
+					declare BallObject <=> Objects[BallObjectId];
+					declare PlayerId for BallObject = NullId;
+					if (Event.PlayerId == PlayerId) {
+						DropBall(BallObject, Event.PlayerLastPosition);
+					}
 				}
 			}
 			PassOn(Event);
@@ -797,12 +813,12 @@ foreach (BallObjectId in G_BallObjectsIds) {
 	switch (BallObject.Status) {
 		case CSmObject::EStatus::Unspawned: {
 			// Reset ball
-			ResetBall(BallObject);
+			ResetBall(BallObject, True);
 		}
 		case CSmObject::EStatus::InWorld: {
 			if (GetRmDrpdBallTime(BallObject) < 0) {
 				// Dropped ball reset
-				ResetBall(BallObject);
+				ResetBall(BallObject, True);
 			}
 		}
 		case CSmObject::EStatus::OnPlayer: {
@@ -818,7 +834,7 @@ foreach (BallObjectId in G_BallObjectsIds) {
 					DropBall(BallObject, BallObject.Player.Position);
 				} else {
 					// Reset ball because of unknown position
-					ResetBall(BallObject);
+					ResetBall(BallObject, True);
 				}
 			}
 		}
@@ -1013,24 +1029,34 @@ TeamStats::Unload();
 Interface::DestroyRank();
 SpawnScreen::DestroyRules();
 WarmUp2::Unload();
+CustomUI::Unload();
 Bots::Unload();
 UIManager.UILayerDestroyAll();
 ***
+
 
 /*****************************************************
 	FUNCTIONS
 *****************************************************/
 
+// Get all balls carried by the player
+CSmObject[] GetBalls(CSmPlayer _Player) {
+	declare Balls = CSmObject[];
+	if (_Player != Null) {
+		foreach (Object in _Player.Objects) {
+			if (G_BallObjectsIds.exists(Object.Id)) {
+				Balls.add(Object);
+			}
+		}
+	}
+	return Balls;
+}
+
 // Check if the given player is carrying balls
 Integer HasBalls(CSmPlayer _Player) {
 	if (_Player == Null) return 0;
-	declare BallCount = 0;
-	foreach (Object in _Player.Objects) {
-		if (G_BallObjectsIds.exists(Object.Id)) {
-			BallCount += 1;
-		}
-	}
-	return BallCount;
+	declare Balls = GetBalls(_Player);
+	return Balls.count;
 }
 
 // Get first ball carried by the player
@@ -1598,7 +1624,7 @@ Boolean PickUpBall(CSmPlayer _Player, CSmObject _Object) {
 	return True;
 }
 
-Void ResetBall(CSmObject _Ball) {
+Void ResetBall(CSmObject _Ball, Boolean _SendMessage) {
 	if (_Ball == Null) return;
 	_Ball.SetPositionAndVel(MapLandmarks_Gauge[G_BallLandmarkId].Position, <0., 0., 0.>);
 	
@@ -1609,8 +1635,11 @@ Void ResetBall(CSmObject _Ball) {
 	declare Boolean AtHome for _Ball;
 	AtHome = True;
 	
-	Message::SendBigMessage(_("The Ball has been reset!"), 3000, 1, CUIConfig::EUISound::PhaseChange, 1);
 	UpdateBaseClans();
+
+	if (_SendMessage) {
+		Message::SendBigMessage(_("The Ball has been reset!"), 3000, 1, CUIConfig::EUISound::PhaseChange, 1);
+	}
 }
 
 // Ball carrier drops the ball
@@ -1778,6 +1807,8 @@ Text CreateLayerExtra() {
 			
 			declare LastUIUpdate = -1;
 			
+			{{{ CustomUI::InjectMLInit() }}}
+			
 			while (True) {
 				yield;
 				
@@ -1806,12 +1837,16 @@ Text CreateLayerExtra() {
 						declare Value = MathLib::FloorInteger(GaugeLandmark.Gauge.ValueReal * 100.);
 						if (Value <= 0) continue;
 						
-						if (Value >= 100 && !GaugeLandmark.Gauge.Captured) Value -= 1;
+						if (Value >= 100 && !GaugeLandmark.Gauge.Captured) {
+							Value -= 1;
+						}
 						Label_Capturing.Value = Value^"%";
 						Gauge_Capturing.SetRatio(GaugeLandmark.Gauge.ValueReal);
 						Gauge_Capturing.SetClan(GaugeLandmark.Gauge.Clan);
 						LastCapturedTime = Now;
-						if (GaugeLandmark.Gauge.Captured) LastCapturedTime += 500;
+						if (GaugeLandmark.Gauge.Captured) {
+							LastCapturedTime += 500;
+						}
 						break;
 					}
 				}
@@ -1860,34 +1895,37 @@ Text CreateLayerExtra() {
 				}
 				
 				// Ball carrier display
-				if (!Net_BallCarrierName.existskey(0)) continue;
-				switch (Net_BallCarrierName[0]) {
-					case " ": {
-						Frame_TeamBar.Visible = False;
-						Label_BallCarrier.Value = _("Home");
-					}
-					case "": {
-						Frame_TeamBar.Visible = False;
-						declare DropText = "";
-						if (Net_RemainingDropTime.existskey(0) && Net_RemainingDropTime[0] > 0) {
-							DropText = " ("^((Net_RemainingDropTime[0] + 300) / 1000)^")";
-						}
-						Label_BallCarrier.Value = TextLib::Compose("%1%2", _("Dropped"), DropText);
-					}
-					default: {
-						if (Net_BallCarrierClan.existskey(0) && Teams.existskey(Net_BallCarrierClan[0] - 1)) {
-							Frame_TeamBar.Visible = True;
-							foreach (Control in Frame_TeamBar.Controls) {
-								declare Quad <=> (Control as CMlQuad);
-								Quad.Colorize = Teams[Net_BallCarrierClan[0] - 1].ColorPrimary;
-							}
-							Label_BallCarrier.Value = "$<"^Teams[Net_BallCarrierClan[0] - 1].ColorText^"$<"^Net_BallCarrierName[0]^"$>$>";
-						} else {
+				if (Net_BallCarrierName.existskey(0)) {
+					switch (Net_BallCarrierName[0]) {
+						case " ": {
 							Frame_TeamBar.Visible = False;
-							Label_BallCarrier.Value = Net_BallCarrierName[0];
+							Label_BallCarrier.Value = _("Home");
+						}
+						case "": {
+							Frame_TeamBar.Visible = False;
+							declare DropText = "";
+							if (Net_RemainingDropTime.existskey(0) && Net_RemainingDropTime[0] > 0) {
+								DropText = " ("^((Net_RemainingDropTime[0] + 300) / 1000)^")";
+							}
+							Label_BallCarrier.Value = TextLib::Compose("%1%2", _("Dropped"), DropText);
+						}
+						default: {
+							if (Net_BallCarrierClan.existskey(0) && Teams.existskey(Net_BallCarrierClan[0] - 1)) {
+								Frame_TeamBar.Visible = True;
+								foreach (Control in Frame_TeamBar.Controls) {
+									declare Quad <=> (Control as CMlQuad);
+									Quad.Colorize = Teams[Net_BallCarrierClan[0] - 1].ColorPrimary;
+								}
+								Label_BallCarrier.Value = "$<"^Teams[Net_BallCarrierClan[0] - 1].ColorText^"$<"^Net_BallCarrierName[0]^"$>$>";
+							} else {
+								Frame_TeamBar.Visible = False;
+								Label_BallCarrier.Value = Net_BallCarrierName[0];
+							}
 						}
 					}
 				}
+				
+				{{{ CustomUI::InjectMLLoop() }}}
 			}
 		}
 		--></script>
@@ -1895,12 +1933,14 @@ Text CreateLayerExtra() {
 		<quad id="Quad_BallCarrierHighlight" posn="0 0 -30" sizen="320 180" hidden="1" halign="center" valign="center2"
 			image="file://Media/Images/SpeedBall/BallCarrierFilter1.png" opacity="0.6"/>
 		
-		<frame id="Frame_BallCarrier" posn="110 -65" hidden="1">
-			<quad posn="0 0 0" sizen="55 8" style="Bgs1InRace" substyle="BgWindow3" halign="center" valign="center2"/>
-			<label id="Label_BallCarrier" posn="0 0 2" sizen="50 7" textprefix="$000" halign="center" valign="center2"/>
-			<frame id="Frame_TeamBar" hidden="1">
-				<quad id="Quad_TeamBar1" posn="-26 0 1" sizen="1 6" image="{{{BarImageUrl}}}" opacity="0.9" halign="center" valign="center2"/>
-				<quad id="Quad_TeamBar2" posn="26 0 1" sizen="1 6" image="{{{BarImageUrl}}}" opacity="0.9" halign="center" valign="center2"/>
+		<frame id="{{{C_Module_BallCarrier}}}" class="LibCustomUI_Module">
+			<frame id="Frame_BallCarrier" posn="110 -65" hidden="1">
+				<quad sizen="55 8" style="Bgs1InRace" substyle="BgWindow3" halign="center" valign="center2"/>
+				<label id="Label_BallCarrier" posn="0 0 2" sizen="50 7" textprefix="$000" halign="center" valign="center2"/>
+				<frame id="Frame_TeamBar" hidden="1">
+					<quad id="Quad_TeamBar1" posn="-26 0 1" sizen="1 6" image="{{{BarImageUrl}}}" opacity="0.9" halign="center" valign="center2"/>
+					<quad id="Quad_TeamBar2" posn="26 0 1" sizen="1 6" image="{{{BarImageUrl}}}" opacity="0.9" halign="center" valign="center2"/>
+				</frame>
 			</frame>
 		</frame>
 		
@@ -1909,9 +1949,11 @@ Text CreateLayerExtra() {
 			<label id="Label_CrosshairBottom" posn="0 -8.5" scale="1" style="TextCardSmallScores2" halign="center" valign="center2"/>
 		</frame>
 		
-		<frame id="Frame_Capturing" hidden="1">
-			<label id="Label_Capturing" posn="0 -25" scale="2" textprefix="$o" halign="center" valign="center2"/>
-			<gauge id="Gauge_Capturing" posn="0 -35" sizen="110 8" style="EnergyBar" halign="center" valign="center2"/>
+		<frame id="{{{C_Module_CaptureBar}}}" class="LibCustomUI_Module">
+			<frame id="Frame_Capturing" posn="0 -30" hidden="1">
+				<label id="Label_Capturing" sizen="60 20" scale="2" textprefix="$o" halign="center" valign="bottom"/>
+				<gauge id="Gauge_Capturing" sizen="110 8" style="EnergyBar" halign="center" valign="top"/>
+			</frame>
 		</frame>""";
 	return Manialink;
 }
