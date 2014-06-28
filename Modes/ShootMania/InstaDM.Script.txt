@@ -82,11 +82,12 @@ ModeStatusMessage = Message;
 ***
 // Set mode options
 UseClans = False;
-DbgEnableNavMesh = True;
+ForceNavMapsComputation = True;
 UsePlayerTagging = True;
 if (MB_NeutralEmblemUrl == "") MB_NeutralEmblemUrl = C_NeutralEmblemUrl;
 
 // UI
+UIManager.UIAll.UISequence_CanSkipIntroMT = True;
 SpawnScreen::SetModeName("InstaDM");
 SpawnScreen::ResetRulesSection();
 SpawnScreen::AddSubsection(_("Rules"), Description^"\n\nYou can see your Shot $<$08fAccuracy$> and $<$08fKill/Death Ratio$> and the Points You did since Spawning ($<$08fStreak$>) on the Scoreboard!\nVery fast consecutive Eliminations will grant you $<$08fKillstreaks$>!", 5.);
