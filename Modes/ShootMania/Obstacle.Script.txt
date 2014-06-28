@@ -1,7 +1,7 @@
 /************************************************************
 *	Game Mode:	Obstacle									*
 *	Author:		steeffeen									*
-*	Contact:	steff@obstacle-records.com					*
+*	Contact:	steeffeen@team-devota.com					*
 *															*
 *	Finish difficult Obstacle Courses as fast as possible.	*
 *	You can respawn at the last reached checkpoints.		*
@@ -10,7 +10,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const ScriptName				"Obstacle.Script.txt"
-#Const Version					"2.2 (2014-05-17)"
+#Const Version					"2.3 (2014-06-28)"
 #Const CompatibleMapTypes		"ObstacleArena,ObstacleTitleArena,TimeAttackArena"
 
 /*********************************************
@@ -1098,7 +1098,7 @@ Text CreateLayerMarkers() {
 			</frame>
 		</framemodel>""";
 	foreach (GaugeLandmark in MapLandmarks_Gauge) {
-		if (GaugeLandmark.Tag == "No-Function") continue;
+		if (GaugeLandmark.Tag == "No-Function" || GaugeLandmark.Tag == "Gate") continue;
 		if (GaugeLandmark.Tag != "Goal" && GaugeLandmark.Order == 0) {
 			Manialink ^= """<frameinstance id="Frame_Marker{{{GaugeLandmark.Id}}}" modelid="FrameModel_CP" hidden="1"/>""";
 		} else {
@@ -1112,7 +1112,7 @@ Text CreateLayerMarkers() {
 Text CreateHud3dMarkers() {
 	declare Markers = """<now value="{{{Now}}}"/>""";
 	foreach (GaugeLandmark in MapLandmarks_Gauge) {
-		if (GaugeLandmark.Tag == "No-Function") continue;
+		if (GaugeLandmark.Tag == "No-Function" || GaugeLandmark.Tag == "Gate") continue;
 		Markers ^= """<marker pos="{{{Tools::GetPosn(GaugeLandmark.Position)}}}" box="0 6 0" visibility="WhenInFrustum"
 			manialinkframeid="Frame_Marker{{{GaugeLandmark.Id}}}"/>""";
 	}
