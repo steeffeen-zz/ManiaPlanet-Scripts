@@ -121,7 +121,6 @@ if (UI != Null) {
 UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
 
 // Submit result
-Records::SubmitRun(_Player, RunNew, RespawnCount, CheckpointsTimeLast);
 while (!UIManager.UIAll.UISequenceIsCompleted) {
 	MB_Yield();
 }
