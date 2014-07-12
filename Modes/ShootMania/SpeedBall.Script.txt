@@ -4,7 +4,7 @@
 *	Contact:	steeffeen@team-devota.com	*
 ********************************************/
 
-#Extends "Modes/ShootMania/ModeBase.Script.txt"
+#Extends "Modes/ShootMania/ModeMatchmaking.Script.txt"
 
 #Const	ScriptName			"SpeedBall.Script.txt"
 #Const	Version				"2.5 (2014-07-12)"
@@ -19,13 +19,11 @@
 #Include "TextLib" as TextLib
 #Include "Libs/Nadeo/CustomUI.Script.txt" as CustomUI
 #Include "Libs/Nadeo/Interface.Script.txt" as Interface
-#Include "Libs/Nadeo/Message.Script.txt" as Message
 #Include "Libs/Nadeo/TabsServer.Script.txt" as Tabs
 #Include "Libs/Nadeo/Top2.Script.txt" as Top
 #Include "Libs/Nadeo/Victory.Script.txt" as Victory
 #Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
 #Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
-#Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
 #Include "Libs/Nadeo/ShootMania/WarmUp2.Script.txt" as WarmUp2
 #Include "Libs/steeffeen/ShootMania/Bots.Script.txt" as Bots
 #Include "Libs/steeffeen/ShootMania/SpeedBallXmlRpc.Script.txt" as SBXmlRpc
@@ -62,6 +60,7 @@
 #Setting	S_NbBotsBlue				0		as "<hidden>"		// Number of bots of team blue
 #Setting	S_NbBotsRed					0		as "<hidden>"		// Number of bots of team red
 #Setting	S_ReduceLaserDamage			False	as "<hidden>"		// Reduce laser damage
+#Setting	S_NbPlayersPerTeam			3		as "<hidden>"		// Match making players count
 
 
 /*****************************************************
@@ -196,6 +195,11 @@ switch (S_Mode) {
 SpawnScreen::CreatePrettyRules("SpeedBall");
 ***
 
+***LobbyStartServer***
+***
+MM_SetFormat([S_NbPlayersPerTeam, S_NbPlayersPerTeam]);
+***
+
 ***StartServer***
 ***
 // Load objects
@@ -206,6 +210,11 @@ if (G_BallItemId == NullId) {
 	G_BallItemId = ItemList_Add("SpeedBall\\Ball3.Item.gbx");
 }
 ItemList_End();
+
+// Matchmaking mode
+if (MM_IsMatchServer()) {
+	MM_Init([S_NbPlayersPerTeam, S_NbPlayersPerTeam]);
+}
 
 // Teams
 UseClans = True;
@@ -256,7 +265,7 @@ UIManager.UIAll.UILayers.add(LayerExtra);
 
 // Tabs
 Tabs::Load();
-declare TabsLayer <=> Tabs::CreateTabPaneLayer(["ScoresTab" => "Rankings", "TopTab" => "Buddies", "TeamStatsTab" => "Statistics"], 14, -2, False);
+declare TabsLayer <=> Tabs::CreateTabPaneLayer(["TopTab" => "Buddies", "TeamStatsTab" => "Statistics", "ScoresTab" => "Rankings"], 14, -2, False);
 TabsLayer.Type = CUILayer::EUILayerType::AltMenu;
 UIManager.UIAll.UILayers.add(TabsLayer);
 
@@ -287,6 +296,7 @@ ST2::SetColScript(C_ST_ColId_Damage, """
 """);
 ST2::SetColLegend("LibST_SMRoundPoints", _("|Amount of points in the current round of the match|Round"));
 ST2::SetColLegend("LibST_SMPoints", _("|Total amount of points in the match|Total"));
+MM_SetScoresTableStyleFromXml(S_ScoresTableStylePath);
 ST2::Build("SM");
 
 {
@@ -348,8 +358,13 @@ if (S_BestOfXMatch > 0) {
 		CUIConfig::EUISound::StartMatch, 0);
 	UpdateClanScoresSummary(True);
 	MB_PlayersPresentationSequence(2500);
-	MB_Sleep(500);
+	MM_Sleep(500);
 }
+***
+
+***InitMap***
+***
+MB_UseIntro = !MM_IsMatchServer();
 ***
 
 ***StartMap***
@@ -372,7 +387,7 @@ Interface::AttachRank();
 LayerTeams.IsVisible = True;
 
 // Auto team balance
-if (S_AutoTeamBalance) {
+if (S_AutoTeamBalance && !MM_IsMatchmakingServer()) {
 	Mode::AutoTeamBalance();
 	SM::UnspawnAllPlayers();
 }
@@ -428,6 +443,13 @@ if (S_UseWarmUp) {
 	DoWarmup();
 	UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
 }
+
+// Wait for players when using matchmaking
+if (MM_IsMatchServer()) {
+	MM_MatchWait();
+	MM_AllowSubstitutes(True);
+}
+
 SM::UnspawnAllPlayers();
 // Clublinks
 if (S_UsePlayerClublinks) {
@@ -483,16 +505,18 @@ UseBeaconsWithRecipients = True;
 
 ***OnNewPlayer***
 ***
+InitPlayer(Player);
 declare UI <=> UIManager.GetUI(Player);
 if (UI == Null) continue;
-Tabs::UseTabs(UI, "ScoresTab");
+Tabs::UseTabs(UI, "TopTab");
 ***
 
 ***OnNewSpectator***
 ***
+InitPlayer(Spectator);
 declare UI <=> UIManager.GetUI(Spectator);
 if (UI == Null) continue;
-Tabs::UseTabs(UI, "ScoresTab");
+Tabs::UseTabs(UI, "TopTab");
 ***
 
 ***Yield***
@@ -505,6 +529,13 @@ Bots::Loop();
 
 ***PlayLoop***
 ***
+// Stop match if there are not enough players left in matchmaking
+if (MM_IsMatchServer()) {
+	if (MM_RestartMatchmaking || ClansNbPlayers[1] <= 0 || ClansNbPlayers[2] <= 0) {
+		MB_StopMatch = True;
+	}
+}
+
 // Check anti block
 if (!UsePvPCollisions && StartTime + C_ExtendedAntiBlockTime < Now) {
 	UsePvPCollisions = True;
@@ -903,7 +934,7 @@ UIManager.UIAll.CountdownEndTime = -1;
 UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
 UpdateNetVariables();
 LayerMarkers.IsVisible = False;
-MB_Sleep(2500);
+MM_Sleep(2500);
 
 foreach (BallObjectId in G_BallObjectsIds) {
 	if (!Objects.existskey(BallObjectId)) continue;
@@ -915,7 +946,7 @@ LayerExtra.IsVisible = False;
 UnspawnObjects(G_BallObjectsIds);
 SM::UnspawnAllPlayers();
 
-MB_Sleep(1000);
+MM_Sleep(1000);
 
 // Evaluate round
 declare Message = _("Round Draw");
@@ -956,7 +987,7 @@ if (!Victory::NoMatchWinner()) {
 }
 
 // Wait to let the players take a breath
-MB_Sleep(3500);
+MM_Sleep(3500);
 Victory::RoundEnd();
 ***
 
@@ -989,12 +1020,31 @@ if (!Victory::IsMatchDraw()) {
 	}
 }
 
+if (MM_IsMatchServer()) {
+	MM_SetLadderMatchId();
+}
+
+declare MasterLogin = "";
+declare MasterPoints = 0;
+foreach (Score in Scores) {
+	Score.LadderRankSortValue = - 1 - Score.Points;
+	if (Score.Points > MasterPoints) {
+		MasterPoints = Score.Points;
+		MasterLogin = Score.User.Login;
+	}
+}
+
 UpdateClanScoresSummary(True);
 UIManager.UIAll.SendNotice(Message,
 	CUIConfig::ENoticeLevel::MatchInfo, Null, CUIConfig::EAvatarVariant::Default, 
 	CUIConfig::EUISound::EndMatch, 0);
+	
+// Send match result
+if (MM_IsMatchServer()) {
+	MM_MatchEnd(MasterLogin);
+}
 
-MB_Sleep(3500);
+MM_Sleep(3500);
 Message::CleanAllMessages();
 
 if (S_BestOfXMatch > 0 && G_ClanMapScores[1] + G_ClanMapScores[2] >= S_BestOfXMatch) {
@@ -1017,7 +1067,12 @@ if (S_BestOfXMatch > 0 && G_ClanMapScores[1] + G_ClanMapScores[2] >= S_BestOfXMa
 	UIManager.UIAll.SendNotice(Message,
 		CUIConfig::ENoticeLevel::MatchInfo, Null, CUIConfig::EAvatarVariant::Default, 
 		CUIConfig::EUISound::EndMatch, 0);
-	MB_Sleep(3500);
+	MM_Sleep(3500);
+}
+
+// Transfert players back to the lobby
+if (MM_IsMatchServer()) {
+	MM_MatchToLobby();
 }
 ***
 
@@ -1038,6 +1093,11 @@ UIManager.UILayerDestroyAll();
 /*****************************************************
 	FUNCTIONS
 *****************************************************/
+
+// Initialize the player
+Void InitPlayer(CSmPlayer _Player) {
+	SetPlayerClan(_Player, MM_GetRequestedClan(_Player));
+}
 
 // Get all balls carried by the player
 CSmObject[] GetBalls(CSmPlayer _Player) {
@@ -1495,7 +1555,7 @@ Void MySpawnPlayer(CSmPlayer _Player) {
 	}
 	
 	// Determine spawn landmark
-	declare SpawnIds = G_ClanSpawnLandmarkIds[_Player.RequestedClan];
+	declare SpawnIds = G_ClanSpawnLandmarkIds[MM_GetRequestedClan(_Player)];
 	declare SpawnIndex = 0;
 	if (G_LastSpawnIndex.existskey(_Player.RequestedClan)) {
 		SpawnIndex = G_LastSpawnIndex[_Player.RequestedClan] + 1;
@@ -2332,5 +2392,5 @@ Void DoWarmup() {
 	
 	if (MB_UseScriptCallbacks) XmlRpc::EndWarmUp();
 	
-	MB_Sleep(1000);
+	MM_Sleep(1000);
 }
