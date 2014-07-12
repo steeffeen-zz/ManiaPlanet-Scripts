@@ -7,7 +7,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const	ScriptName			"SpeedBall.Script.txt"
-#Const	Version				"2.4.1 (2014-06-28)"
+#Const	Version				"2.5 (2014-07-12)"
 #Const	CompatibleMapTypes	"SpeedBallArena,SpeedBallTitleArena"
 
 
@@ -28,6 +28,7 @@
 #Include "Libs/Nadeo/ShootMania/SpawnScreen.Script.txt" as SpawnScreen
 #Include "Libs/Nadeo/ShootMania/WarmUp2.Script.txt" as WarmUp2
 #Include "Libs/steeffeen/ShootMania/Bots.Script.txt" as Bots
+#Include "Libs/steeffeen/ShootMania/SpeedBallXmlRpc.Script.txt" as SBXmlRpc
 #Include "Libs/steeffeen/TeamStats.Script.txt" as TeamStats 
 #Include "Libs/steeffeen/Tools.Script.txt" as Tools
 
@@ -61,7 +62,6 @@
 #Setting	S_NbBotsBlue				0		as "<hidden>"		// Number of bots of team blue
 #Setting	S_NbBotsRed					0		as "<hidden>"		// Number of bots of team red
 #Setting	S_ReduceLaserDamage			False	as "<hidden>"		// Reduce laser damage
-#Setting	S_ChangeBallWeaponVisual	False	as "<hidden>"		// Use alternate ball visual
 
 
 /*****************************************************
@@ -149,6 +149,7 @@ MB_LogVersion(Interface::GetScriptName(), Interface::GetScriptVersion());
 MB_LogVersion(Message::GetScriptName(), Message::GetScriptVersion());
 MB_LogVersion(Score::GetScriptName(), Score::GetScriptVersion());
 MB_LogVersion(SM::GetScriptName(), SM::GetScriptVersion());
+MB_LogVersion(SBXmlRpc::GetScriptName(), SBXmlRpc::GetScriptVersion());
 MB_LogVersion(SpawnScreen::GetScriptName(), SpawnScreen::GetScriptVersion());
 MB_LogVersion(Tabs::GetScriptName(), Tabs::GetScriptVersion());
 MB_LogVersion(Top::GetScriptName(), Top::GetScriptVersion());
@@ -532,7 +533,6 @@ foreach (Player in Players) {
 					// Ball carrier!
 					Player.EnergyLevel = 1.;
 					Player.ArmorReplenishGain = C_BallCarrierArmorReplenishGain;
-					Player.UseAlternateWeaponVisual = S_ChangeBallWeaponVisual;
 				} else {
 					// Usual player (without ball)
 					Player.EnergyLevel = C_PlayerHighlightValue;
@@ -541,9 +541,9 @@ foreach (Player in Players) {
 					if (Player.Armor > 100 && Player.Armor < 200) {
 						Player.Armor = 100;
 					}
-					// Disable alternate ball weapon visual
-					Player.UseAlternateWeaponVisual = False;
 				}
+				// Toggle alternate ball weapon visual
+				Player.UseAlternateWeaponVisual = HasBall;
 			}
 		}
 	}
@@ -576,7 +576,9 @@ foreach (Event in PendingEvents) {
 			} else {
 				if (!S_ThrowableBall && HasBalls(Event.Shooter) > 0) {
 					// Ball carrier hit someone -> Pass the ball
-					PassBall(Event.Shooter, Event.Victim, GetBall(Event.Shooter));
+					if (PassBall(Event.Shooter, Event.Victim, GetBall(Event.Shooter))) {
+						SBXmlRpc::OnPass(Event);
+					}
 					SendHitMessage(Event, True);
 					Discard(Event);
 				} else {
@@ -662,9 +664,7 @@ foreach (Event in PendingEvents) {
 				// Reward ball carrier
 				AddPoints(BallObject.Player, 5);
 				UpdateCaptures(BallObject.Player, 1);
-				if (!BallObject.Player.IsFakePlayer) {
-					XmlRpc.SendCallback("poleCapture", BallObject.Player.Login);
-				}
+				SBXmlRpc::OnCapture(Event, BallObject);
 				UIManager.UIAll.SendNotice(TextLib::Compose(_("%1 scores for %2!"),
 					GetColorizedPlayerName(BallObject.Player), "$<"^Teams[BallObject.Player.CurrentClan-1].ColorizedName^"$>"),
 					CUIConfig::ENoticeLevel::MatchInfo, Null, CUIConfig::EAvatarVariant::Default,
@@ -1682,15 +1682,15 @@ Void DropBalls(CSmPlayer _Player) {
 }
 
 // Player passes the ball
-Void PassBall(CSmPlayer _Shooter, CSmPlayer _Victim, CSmObject _Ball) {
+Boolean PassBall(CSmPlayer _Shooter, CSmPlayer _Victim, CSmObject _Ball) {
 	// Perform several checks if passing is allowed right now because of weird event bugs of the game itself
-	if (_Shooter == Null || _Victim == Null || _Ball == Null) return;
-	if (Now < StartTime || StartTime < 0) return;
-	if (_Ball.Player != _Shooter) return;
-	if (_Victim.StartTime > Now || _Victim.Armor <= 0 || (!C_BotsCanHaveBall && _Victim.IsFakePlayer)) return;
+	if (_Shooter == Null || _Victim == Null || _Ball == Null) return False;
+	if (Now < StartTime || StartTime < 0) return False;
+	if (_Ball.Player != _Shooter) return False;
+	if (_Victim.StartTime > Now || _Victim.Armor <= 0 || (!C_BotsCanHaveBall && _Victim.IsFakePlayer)) return False;
 	if (_Shooter.Armor <= 0) {
 		DropBall(_Ball, _Shooter.Position);
-		return;
+		return False;
 	}
 	
 	// Pass the ball
@@ -1698,22 +1698,22 @@ Void PassBall(CSmPlayer _Shooter, CSmPlayer _Victim, CSmObject _Ball) {
 	PlayerId = _Victim.Id;
 	_Ball.SetPlayer(_Victim);
 	
+	// Announce pass
 	Message::SendBigMessage(TextLib::Compose(_("%1 has the %2Ball%3!"),
 		GetColorizedPlayerName(_Victim),
 		"$<"^Teams[_Victim.CurrentClan-1].ColorText, "$>"), 3000, 2, CUIConfig::EUISound::Warning, 0);
 	
-	if (_Shooter.CurrentClan == _Victim.CurrentClan) {
-		// Team pass -> Grant points!
-		AddPoints(_Shooter, 2);
-		UpdatePasses(_Shooter, 1);
-		UpdateStatPasses(_Shooter.CurrentClan - 1, 1);
-		if (!_Shooter.IsFakePlayer) {
-			XmlRpc.SendCallback("passBall", "Shooter:"^_Shooter.Login^";Victim:"^_Victim.Login);
-		}
-	} else {
+	if (_Shooter.CurrentClan != _Victim.CurrentClan) {
 		// Pass to opponent
 		UpdateBaseClans();
+		return False;
 	}
+	
+	// Grant points
+	AddPoints(_Shooter, 2);
+	UpdatePasses(_Shooter, 1);
+	UpdateStatPasses(_Shooter.CurrentClan - 1, 1);
+	return True;
 }
 
 // Updates clan scores at the top
@@ -1768,7 +1768,9 @@ Void UpdateClanScoresSummary(Boolean _Tolerant) {
 // Create the extra layer manialink
 Text CreateLayerExtra() {
 	declare BarImageUrl = "file://Media/Images/Common/GreenBar.png";
-	declare Manialink = """<script><!--
+	declare Manialink = """
+<manialink version="1" name="SpeedBall_LayerExtra">
+	<script><!--
 		#Include "MathLib" as MathLib
 		#Include "TextLib" as TextLib
 		
@@ -1928,33 +1930,34 @@ Text CreateLayerExtra() {
 				{{{ CustomUI::InjectMLLoop() }}}
 			}
 		}
-		--></script>
-		<label id="Label_Phase" posn="0 89 50" sizen="30 0" textsize="1" scale="0.8" hidden="1" halign="center" valign="center2"/>
-		<quad id="Quad_BallCarrierHighlight" posn="0 0 -30" sizen="320 180" hidden="1" halign="center" valign="center2"
-			image="file://Media/Images/SpeedBall/BallCarrierFilter1.png" opacity="0.6"/>
-		
-		<frame id="{{{C_Module_BallCarrier}}}" class="LibCustomUI_Module">
-			<frame id="Frame_BallCarrier" posn="110 -65" hidden="1">
-				<quad sizen="55 8" style="Bgs1InRace" substyle="BgWindow3" halign="center" valign="center2"/>
-				<label id="Label_BallCarrier" posn="0 0 2" sizen="50 7" textprefix="$000" halign="center" valign="center2"/>
-				<frame id="Frame_TeamBar" hidden="1">
-					<quad id="Quad_TeamBar1" posn="-26 0 1" sizen="1 6" image="{{{BarImageUrl}}}" opacity="0.9" halign="center" valign="center2"/>
-					<quad id="Quad_TeamBar2" posn="26 0 1" sizen="1 6" image="{{{BarImageUrl}}}" opacity="0.9" halign="center" valign="center2"/>
-				</frame>
+	--></script>
+	<label id="Label_Phase" posn="0 89 50" sizen="30 0" textsize="1" scale="0.8" hidden="1" halign="center" valign="center2"/>
+	<quad id="Quad_BallCarrierHighlight" posn="0 0 -30" sizen="320 180" hidden="1" halign="center" valign="center2"
+		image="file://Media/Images/SpeedBall/BallCarrierFilter1.png" opacity="0.6"/>
+	
+	<frame id="{{{C_Module_BallCarrier}}}" class="LibCustomUI_Module">
+		<frame id="Frame_BallCarrier" posn="110 -65" hidden="1">
+			<quad sizen="55 8" style="Bgs1InRace" substyle="BgTitlePage" opacity="0.5" halign="center" valign="center2"/>
+			<label id="Label_BallCarrier" posn="0 0 2" sizen="50 7" textprefix="$000" halign="center" valign="center2"/>
+			<frame id="Frame_TeamBar" hidden="1">
+				<quad id="Quad_TeamBar1" posn="-26 0 1" sizen="0.7 6" image="{{{BarImageUrl}}}" opacity="0.8" halign="center" valign="center2"/>
+				<quad id="Quad_TeamBar2" posn="26 0 1" sizen="0.7 6" image="{{{BarImageUrl}}}" opacity="0.8" halign="center" valign="center2"/>
 			</frame>
 		</frame>
-		
-		<frame id="Frame_Crosshair" hidden="1">
-			<label id="Label_CrosshairTop" posn="0 7" scale="2" halign="center" valign="center2"/>
-			<label id="Label_CrosshairBottom" posn="0 -8.5" scale="1" style="TextCardSmallScores2" halign="center" valign="center2"/>
+	</frame>
+	
+	<frame id="Frame_Crosshair" hidden="1">
+		<label id="Label_CrosshairTop" posn="0 7" scale="2" halign="center" valign="center2"/>
+		<label id="Label_CrosshairBottom" posn="0 -8.5" scale="1" style="TextCardSmallScores2" halign="center" valign="center2"/>
+	</frame>
+	
+	<frame id="{{{C_Module_CaptureBar}}}" class="LibCustomUI_Module">
+		<frame id="Frame_Capturing" posn="0 -30" hidden="1">
+			<label id="Label_Capturing" sizen="60 20" scale="2" textprefix="$o" halign="center" valign="bottom"/>
+			<gauge id="Gauge_Capturing" sizen="110 8" style="EnergyBar" halign="center" valign="top"/>
 		</frame>
-		
-		<frame id="{{{C_Module_CaptureBar}}}" class="LibCustomUI_Module">
-			<frame id="Frame_Capturing" posn="0 -30" hidden="1">
-				<label id="Label_Capturing" sizen="60 20" scale="2" textprefix="$o" halign="center" valign="bottom"/>
-				<gauge id="Gauge_Capturing" sizen="110 8" style="EnergyBar" halign="center" valign="top"/>
-			</frame>
-		</frame>""";
+	</frame>
+</manialink>""";
 	return Manialink;
 }
 
@@ -1995,7 +1998,9 @@ Text GetRankings() {
 // Create markers layer manialink
 Text CreateMarkersLayer() {
 	declare BallImageSize = 0.45;
-	declare Manialink = """<script><!--
+	declare Manialink = """
+<manialink version="1" name="SpeedBall_MarkersLayer">
+<script><!--
 		#Include "TextLib" as TextLib
 
 		main() {
@@ -2104,20 +2109,21 @@ Text CreateMarkersLayer() {
 				}
 			}
 		}
-		--></script>
-		<frame id="Frame_BallMarkerHelp0" hidden="1"/>
-		<frame id="Frame_BallMarker0" hidden="1">
-			<label id="Label_BallMarker" sizen="9 16" posn="0.1 5.5" scale="0.9" textprefix="$f05" halign="center" valign="bottom"/>
-			<quad id="Quad_BallMarker" sizen="{{{9. * BallImageSize}}} {{{16. * BallImageSize}}}" image="file://Media/Images/SpeedBall/BallLogo.png"
-				opacity="0.9" halign="center" valign="bottom"/>
-		</frame>
-		<framemodel id="Model_GaugeMarkerFrame">
-			<label id="Label_GaugeMarker" posn="0 4 -39" textsize="2" scale="0.8" halign="center" valign="center2"/>
-			<quad posn="0 4 -40" sizen="16 4" style="BgsPlayerCard" substyle="BgMediaTracker" halign="center" valign="center2"/>
-			<quad posn="0 2 -40" sizen="4 8.5" opacity="0.4" halign="center" valign="center2" colorize="1 1 1" image="{{{C_ImgBaseDir}}}target.dds"/>
-		</framemodel>
-		<frameinstance id="Frame_GaugeMarker1" modelid="Model_GaugeMarkerFrame" hidden="1"/>
-		<frameinstance id="Frame_GaugeMarker2" modelid="Model_GaugeMarkerFrame" hidden="1"/>""";
+	--></script>
+	<frame id="Frame_BallMarkerHelp0" hidden="1"/>
+	<frame id="Frame_BallMarker0" hidden="1">
+		<label id="Label_BallMarker" sizen="9 16" posn="0.1 5.5" scale="0.9" textprefix="$f05" halign="center" valign="bottom"/>
+		<quad id="Quad_BallMarker" sizen="{{{9. * BallImageSize}}} {{{16. * BallImageSize}}}" image="file://Media/Images/SpeedBall/BallLogo.png"
+			opacity="0.9" halign="center" valign="bottom"/>
+	</frame>
+	<framemodel id="Model_GaugeMarkerFrame">
+		<label id="Label_GaugeMarker" posn="0 4 -39" textsize="2" scale="0.8" halign="center" valign="center2"/>
+		<quad posn="0 4 -40" sizen="16 4" style="BgsPlayerCard" substyle="BgMediaTracker" halign="center" valign="center2"/>
+		<quad posn="0 2 -40" sizen="4 8.5" opacity="0.4" halign="center" valign="center2" colorize="1 1 1" image="{{{C_ImgBaseDir}}}target.dds"/>
+	</framemodel>
+	<frameinstance id="Frame_GaugeMarker1" modelid="Model_GaugeMarkerFrame" hidden="1"/>
+	<frameinstance id="Frame_GaugeMarker2" modelid="Model_GaugeMarkerFrame" hidden="1"/>
+</manialink>""";
 	return Manialink;
 }
 
@@ -2229,7 +2235,7 @@ Void CheckSettings() {
 
 // Perform warm up session
 Void DoWarmup() {
-	if (MB_UseScriptCallbacks) XmlRpc.SendCallback("BeginWarmup", "");
+	if (MB_UseScriptCallbacks) XmlRpc::BeginWarmUp();
 	
 	declare PlayerCount = Players.count;
 	declare SlotNb = PlayerCount / 2;
@@ -2324,7 +2330,7 @@ Void DoWarmup() {
 	UIManager.UIAll.BigMessage = "";
 	UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
 	
-	if (MB_UseScriptCallbacks) XmlRpc.SendCallback("EndWarmup", "");
+	if (MB_UseScriptCallbacks) XmlRpc::EndWarmUp();
 	
 	MB_Sleep(1000);
 }

@@ -144,7 +144,9 @@ Text GetStat(Text _StatId, Integer _Clan) {
 
 // Build the stats manialink
 Void BuildManialink() {
-	declare Manialink = """<script><!--
+	declare Manialink = """
+<manialink version="1" name="LibTeamStats">
+	<script><!--
 		#Include "TextLib" as TextLib
 		
 		/**
@@ -212,8 +214,8 @@ Void BuildManialink() {
 				}
 			}
 		}
-		--></script>
-		<frame id="Frame_Stats" hidden="1">""";
+	--></script>
+	<frame id="Frame_Stats" hidden="1">""";
 	
 	// Title
 	Manialink ^= """
@@ -249,7 +251,8 @@ Void BuildManialink() {
 			<frameinstance id="{{{TextLib::MLEncode(StatId)}}}" modelid="Model_Stats" posn="0 {{{Pos}}}"/>""";
 	}
 	Manialink ^= """
-		</frame>""";
+		</frame>
+</manialink>""";
 	
 	// Set manialink
 	declare LayerStats = Private_GetLayerStats();
