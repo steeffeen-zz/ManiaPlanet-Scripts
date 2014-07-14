@@ -7,7 +7,7 @@
 #Extends "Modes/ShootMania/ModeMatchmaking.Script.txt"
 
 #Const	ScriptName			"SpeedBall.Script.txt"
-#Const	Version				"2.5 (2014-07-12)"
+#Const	Version				"2.5.1 (2014-07-14)"
 #Const	CompatibleMapTypes	"SpeedBallArena,SpeedBallTitleArena"
 
 
@@ -508,7 +508,7 @@ UseBeaconsWithRecipients = True;
 InitPlayer(Player);
 declare UI <=> UIManager.GetUI(Player);
 if (UI == Null) continue;
-Tabs::UseTabs(UI, "TopTab");
+Tabs::UseTabs(UI, "ScoresTab");
 ***
 
 ***OnNewSpectator***
@@ -516,7 +516,7 @@ Tabs::UseTabs(UI, "TopTab");
 InitPlayer(Spectator);
 declare UI <=> UIManager.GetUI(Spectator);
 if (UI == Null) continue;
-Tabs::UseTabs(UI, "TopTab");
+Tabs::UseTabs(UI, "ScoresTab");
 ***
 
 ***Yield***
