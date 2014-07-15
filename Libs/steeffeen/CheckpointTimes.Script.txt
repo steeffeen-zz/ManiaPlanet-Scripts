@@ -89,7 +89,9 @@ Void Unload() {
 Void Build() {
 	declare Layer = Private_GetLayer();
 	if (Layer == Null) return;
-	declare Manialink = """<script><!--
+	declare Manialink = """
+<manialink version="1" name="CPTimes">
+	<script><!--
 		#Include "TextLib" as TextLib
 		
 		Void UpdateFrameTab(CUIConfig UI, CMlPage Page, Text TabKey, CMlFrame MainFrame) {
@@ -265,7 +267,9 @@ Void Build() {
 		Manialink ^= """<frameinstance id="Frame_Time{{{Index}}}" modelid="Model_Time" posn="{{{BaseX}}} {{{Y}}}"/>""";
 	}
 	
-	Manialink ^= """</frame>""";
+	Manialink ^= """
+	</frame>
+</manialink>""";
 	
 	// Set manialink
 	Layer.ManialinkPage = Manialink;

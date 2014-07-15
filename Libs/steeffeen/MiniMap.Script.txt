@@ -66,7 +66,9 @@ Void Build() {
 	declare Layer <=> Private_GetLayer();
 	if (Layer == Null) return;
 	
-	declare Manialink = """<script><!--
+	declare Manialink = """
+<manialink version="1" name="MiniMap">
+	<script><!--
 		#Include "MathLib" as MathLib
 		#Include "TextLib" as TextLib
 		
@@ -330,47 +332,48 @@ Void Build() {
 				}
 			}
 		}
-		--></script>
-		<frame id="Frame_Main" hidden="1">
-			<label id="Label_Header" posn="{{{Tools::GetPosn(<-0.486*C_QuadSize, 0.48*C_QuadSize>)}}}" textsize="1" style="TextTitle1"
-				halign="left" valign="center2"/>
-			<quad sizen="{{{Tools::GetPosn(<C_QuadSize, C_QuadSize, -10.>)}}}" style="Bgs1InRace" substyle="BgList"
-				halign="center" valign="center2"/>
-			<quad id="Quad_Close" posn="{{{Tools::GetPosn(<0.478*C_QuadSize,0.478*C_QuadSize,-20.>)}}}" sizen="6 6" style="Icons64x64_1" substyle="Close"
-				scriptevents="1" halign="center" valign="center2"/>
-			<frame id="Frame_Tooltip" hidden="1">
-				<quad sizen="45 5" style="Bgs1InRace" substyle="BgList" halign="center" valign="center2"/>
-				<label id="Label_Tooltip" textsize="1" style="TextTitle1" halign="center" valign="center2"/>
-			</frame>
-			<frame id="Frame_Spawns">""";
+	--></script>
+	<frame id="Frame_Main" hidden="1">
+		<label id="Label_Header" posn="{{{Tools::GetPosn(<-0.486*C_QuadSize, 0.48*C_QuadSize>)}}}" textsize="1" style="TextTitle1"
+			halign="left" valign="center2"/>
+		<quad sizen="{{{Tools::GetPosn(<C_QuadSize, C_QuadSize, -10.>)}}}" style="Bgs1InRace" substyle="BgList"
+			halign="center" valign="center2"/>
+		<quad id="Quad_Close" posn="{{{Tools::GetPosn(<0.478*C_QuadSize,0.478*C_QuadSize,-20.>)}}}" sizen="6 6" style="Icons64x64_1" substyle="Close"
+			scriptevents="1" halign="center" valign="center2"/>
+		<frame id="Frame_Tooltip" hidden="1">
+			<quad sizen="45 5" style="Bgs1InRace" substyle="BgList" halign="center" valign="center2"/>
+			<label id="Label_Tooltip" textsize="1" style="TextTitle1" halign="center" valign="center2"/>
+		</frame>
+		<frame id="Frame_Spawns">""";
 	for (Index, 0, C_SpotsCount) {
 		Manialink ^= """
-				<quad id="Spaw{{{Index}}}" posn="0 0 1" sizen="{{{C_SpotSize}}} {{{C_SpotSize}}}" style="Icons64x64_1" substyle="LvlYellow"
-					halign="center" valign="center2" scriptevents="1"/>""";
+			<quad id="Spaw{{{Index}}}" posn="0 0 1" sizen="{{{C_SpotSize}}} {{{C_SpotSize}}}" style="Icons64x64_1" substyle="LvlYellow"
+				halign="center" valign="center2" scriptevents="1"/>""";
 	}
 	Manialink ^= """
-			</frame>
-			<frame id="Frame_Poles">""";
+		</frame>
+		<frame id="Frame_Poles">""";
 	for (Index, 0, C_SpotsCount) {
 		Manialink ^= """
-				<frame id="Frame_Pole_{{{Index}}}" hidden="1">
-					<quad id="Pole{{{Index}}}" posn="0 0 2" sizen="{{{C_SpotSize}}} {{{C_SpotSize}}}" style="Icons64x64_1" substyle="LvlGreen"
-						halign="center" valign="center2" scriptevents="1"/>
-					<label id="Label_Pole_{{{Index}}}" posn="{{{Tools::GetPosn(<C_LabelOffset, -C_LabelOffset>)}}}" textsize="1" style="TextTitle1"
-						halign="center" valign="center2"/>
-				</frame>""";
+			<frame id="Frame_Pole_{{{Index}}}" hidden="1">
+				<quad id="Pole{{{Index}}}" posn="0 0 2" sizen="{{{C_SpotSize}}} {{{C_SpotSize}}}" style="Icons64x64_1" substyle="LvlGreen"
+					halign="center" valign="center2" scriptevents="1"/>
+				<label id="Label_Pole_{{{Index}}}" posn="{{{Tools::GetPosn(<C_LabelOffset, -C_LabelOffset>)}}}" textsize="1" style="TextTitle1"
+					halign="center" valign="center2"/>
+			</frame>""";
 	}
 	Manialink ^= """
-			</frame>
-			<frame id="Frame_Players">""";
+		</frame>
+		<frame id="Frame_Players">""";
 	for (Index, 0, C_SpotsCount) {
 		Manialink ^= """
-				<quad id="Play{{{Index}}}" posn="0 0 3" sizen="{{{C_SpotSize}}} {{{C_SpotSize}}}" style="Icons64x64_1" substyle="LvlRed"
-					halign="center" valign="center2" hidden="1" scriptevents="1"/>""";
+			<quad id="Play{{{Index}}}" posn="0 0 3" sizen="{{{C_SpotSize}}} {{{C_SpotSize}}}" style="Icons64x64_1" substyle="LvlRed"
+				halign="center" valign="center2" hidden="1" scriptevents="1"/>""";
 	}
 	Manialink ^= """
-			</frame>
-		</frame>""";
+		</frame>
+	</frame>
+</manialink>""";
 	
 	Layer.ManialinkPage = Manialink;
 }

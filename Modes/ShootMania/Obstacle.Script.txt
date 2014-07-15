@@ -10,7 +10,7 @@
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
 
 #Const ScriptName				"Obstacle.Script.txt"
-#Const Version					"2.3 (2014-06-28)"
+#Const Version					"2.4 (2014-07-15)"
 #Const CompatibleMapTypes		"ObstacleArena,ObstacleTitleArena,TimeAttackArena"
 
 /*********************************************
@@ -285,9 +285,6 @@ if (UI != Null) {
 	UI.SendNotice(TextLib::Compose("%1: $<%2$> %3", _("|Goal|Finish"), Color^Time, NewBestTime),
 		CUIConfig::ENoticeLevel::PlayerInfo, _Player.User, CUIConfig::EAvatarVariant::Default,
 		CUIConfig::EUISound::Finish, Variant);
-	
-	declare Rank for _Player.Score = -1;
-	Message::SendBigMessage(_Player, TextLib::Compose("%1: %2/%3", _("|Ranking|Rank"), TextLib::ToText(Rank), TextLib::ToText(Scores.count)), 3000, 3);
 }
 ***
 
@@ -390,8 +387,10 @@ foreach (AnchorLandmark in MapLandmarks_ObjectAnchor) {
 			declare metadata Meta_BuffDuration for AnchorLandmark = 5.;
 			declare Text ItemName for Object;
 			declare Real Duration for Object;
+			declare Ident AnchorLandmarkId for Object;
 			ItemName = T_ItemOffzone;
 			Duration = Meta_BuffDuration;
+			AnchorLandmarkId = AnchorLandmark.Id;
 		}
 		case T_ItemAmmo: {
 			declare Object = ObjectCreate(G_ItemIdents[T_ItemAmmo]);
@@ -401,9 +400,11 @@ foreach (AnchorLandmark in MapLandmarks_ObjectAnchor) {
 			declare Text ItemName for Object;
 			declare Real Duration for Object;
 			declare Real Amount for Object;
+			declare Ident AnchorLandmarkId for Object;
 			ItemName = T_ItemAmmo;
 			Duration = Meta_GrantAmmoDuration;
 			Amount = Meta_GrantAmmoAmount;
+			AnchorLandmarkId = AnchorLandmark.Id;
 		}
 	}
 	if (Objects.count > 100) break;
@@ -510,44 +511,46 @@ foreach (Event in PendingEvents) {
 			Discard(Event);
 		}
 		case CSmModeEvent::EType::OnPlayerTouchesObject: {
-			if (Event.Object != Null && Event.Player != Null) {
-				declare PickedUp = False;
-				declare ItemName for Event.Object = "";
-				switch (ItemName) {
-					case T_ItemOffzone: {
-						// Offzone pickup
-						declare netwrite ItemBuffTimes for Event.Player = Integer[Text];
-						declare Duration for Event.Object = 5.;
-						if (!ItemBuffTimes.existskey(T_ItemOffzone) || ItemBuffTimes[T_ItemOffzone] < Now) {
-							ItemBuffTimes[T_ItemOffzone] = Now + MathLib::NearestInteger(Duration * 1000.);
-							PickedUp = True;
-						}
-					}
-					case T_ItemAmmo: {
-						// Ammo item
-						declare netwrite ItemBuffTimes for Event.Player = Integer[Text];
-						if (!ItemBuffTimes.existskey(T_ItemAmmo)) {
-							declare Duration for Event.Object = 0.;
-							declare Amount for Event.Object = 1.;
-							ItemBuffTimes[T_ItemAmmo] = Now + MathLib::NearestInteger(Duration * 1000.);
-							declare Real AmmoItemBuffDuration for Event.Player;
-							declare Real AmmoItemBuffAmount for Event.Player;
-							AmmoItemBuffDuration = Duration;
-							AmmoItemBuffAmount = Amount;
-							if (Duration <= 0.) {
-								// Instant grant
-								AddPlayerAmmo(Event.Player, Tools::GetCurrentWeapon(Event.Player), Amount);
-							}
-							PickedUp = True;
-						}
+			if (Event.Object == Null || Event.Player == Null) {
+				Discard(Event);
+				continue;
+			}
+			declare PickedUp = False;
+			declare ItemName for Event.Object = "";
+			switch (ItemName) {
+				case T_ItemOffzone: {
+					// Offzone pickup
+					declare netwrite ItemBuffTimes for Event.Player = Integer[Text];
+					declare Duration for Event.Object = 5.;
+					if (!ItemBuffTimes.existskey(T_ItemOffzone) || ItemBuffTimes[T_ItemOffzone] < Now) {
+						ItemBuffTimes[T_ItemOffzone] = Now + MathLib::NearestInteger(Duration * 1000.);
+						PickedUp = True;
 					}
 				}
-				if (PickedUp) {
-					PassOn(Event);
-					continue;
+				case T_ItemAmmo: {
+					// Ammo item
+					declare netwrite ItemBuffTimes for Event.Player = Integer[Text];
+					if (!ItemBuffTimes.existskey(T_ItemAmmo)) {
+						declare Duration for Event.Object = 0.;
+						declare Amount for Event.Object = 1.;
+						ItemBuffTimes[T_ItemAmmo] = Now + MathLib::NearestInteger(Duration * 1000.);
+						declare Real AmmoItemBuffDuration for Event.Player;
+						declare Real AmmoItemBuffAmount for Event.Player;
+						AmmoItemBuffDuration = Duration;
+						AmmoItemBuffAmount = Amount;
+						if (Duration <= 0.) {
+							// Instant grant
+							AddPlayerAmmo(Event.Player, Tools::GetCurrentWeapon(Event.Player), Amount);
+						}
+						PickedUp = True;
+					}
 				}
 			}
-			Discard(Event);
+			if (PickedUp) {
+				PassOn(Event);
+			} else {
+				Discard(Event);
+			}
 		}
 		default: {
 			PassOn(Event);
@@ -626,6 +629,17 @@ foreach (Player in Players) {
 					ActivateCheckpoint(Player, Player.CapturedLandmark.Id);
 				}
 			}
+		}
+	}
+}
+
+// Manage objects
+foreach (Object in Objects) {
+	if (Object.Status != CSmObject::EStatus::OnAnchor) {
+		declare AnchorLandmarkId for Object = NullId;
+		if (MapLandmarks_ObjectAnchor.existskey(AnchorLandmarkId)) {
+			declare AnchorLandmark <=> MapLandmarks_ObjectAnchor[AnchorLandmarkId];
+			Object.SetAnchor(AnchorLandmark.ObjectAnchor);
 		}
 	}
 }
@@ -991,7 +1005,10 @@ Vec3 UpscaleColor(Vec3 _Color) {
 
 // Create markers layer manialink
 Text CreateLayerMarkers() {
-	declare Manialink = """<now value="{{{Now}}}"/><script><!--
+	declare Manialink = """
+<manialink version="1" name="Obstacle_LayerMarkers">
+	<now value="{{{Now}}}"/>
+	<script><!--
 		#Include "TextLib" as TextLib
 		
 		#Const	C_CheckpointsTotal	{{{G_CheckpointsTotal}}}
@@ -1082,21 +1099,21 @@ Text CreateLayerMarkers() {
 				}
 			}
 		}
-		--></script>
-		<framemodel id="FrameModel_Marker">
-			<frame id="Content" hidden="1">
-				<label id="Label_Text" posn="0 2 1" textsize="1" halign="center" valign="center2"/>
-				<quad id="Quad_Background" posn="0 2 0" sizen="11 4" halign="center" valign="center2" style="BgsPlayerCard" substyle="BgMediaTracker"/>
-				<quad id="Quad_Arrow" posn="0 0 1" sizen="4 8.5" opacity="0.35" halign="center" valign="center2" colorize="1 1 1"
-					image="file://Media/Manialinks/ShootMania/Common/target.dds"/>
-			</frame>
-		</framemodel>
-		<framemodel id="FrameModel_CP">
-			<frame id="Content" hidden="1">
-				<quad posn="0 0 1" sizen="4 8.5" opacity="0.5" halign="center" valign="center2" colorize="1 1 1"
-					image="file://Media/Manialinks/ShootMania/Common/target.dds"/>
-			</frame>
-		</framemodel>""";
+	--></script>
+	<framemodel id="FrameModel_Marker">
+		<frame id="Content" hidden="1">
+			<label id="Label_Text" posn="0 2 1" textsize="1" halign="center" valign="center2"/>
+			<quad id="Quad_Background" posn="0 2 0" sizen="11 4" halign="center" valign="center2" style="BgsPlayerCard" substyle="BgMediaTracker"/>
+			<quad id="Quad_Arrow" posn="0 0 1" sizen="4 8.5" opacity="0.35" halign="center" valign="center2" colorize="1 1 1"
+				image="file://Media/Manialinks/ShootMania/Common/target.dds"/>
+		</frame>
+	</framemodel>
+	<framemodel id="FrameModel_CP">
+		<frame id="Content" hidden="1">
+			<quad posn="0 0 1" sizen="4 8.5" opacity="0.5" halign="center" valign="center2" colorize="1 1 1"
+				image="file://Media/Manialinks/ShootMania/Common/target.dds"/>
+		</frame>
+	</framemodel>""";
 	foreach (GaugeLandmark in MapLandmarks_Gauge) {
 		if (GaugeLandmark.Tag == "No-Function" || GaugeLandmark.Tag == "Gate") continue;
 		if (GaugeLandmark.Tag != "Goal" && GaugeLandmark.Order == 0) {
@@ -1105,7 +1122,10 @@ Text CreateLayerMarkers() {
 			Manialink ^= """<frameinstance id="Frame_Marker{{{GaugeLandmark.Id}}}" modelid="FrameModel_Marker" hidden="1"/>""";
 		}
 	}
-	return Manialink^G_DefaultMarkerFrames;
+	Manialink ^= G_DefaultMarkerFrames;
+	Manialink ^= """
+</manialink>""";
+	return Manialink;
 }
 
 // Create hud3dmarkers
@@ -1233,7 +1253,9 @@ Void UpdateRanking() {
 
 // Create the info layer manialink
 Text CreateLayerInfo() {
-	return """<script><!--
+	return """
+<manialink version="1" name="Obstacle_LayerInfo">
+	<script><!--
 		#Include "TextLib" as TextLib
 		
 		main() {
@@ -1338,7 +1360,8 @@ Text CreateLayerInfo() {
 			<label id="Label_Chrono" posn="0 -0.9 1" sizen="40 10" style="TextRaceChrono" halign="center" valign="center2"/>
 			<quad posn="0 0" sizen="40 10" style="BgsPlayerCard" substyle="BgPlayerCard" halign="center" valign="center2"/>
 		</frame>
-	</frame>""";
+	</frame>
+</manialink>""";
 }
 
 // Update the info layer
@@ -1354,7 +1377,9 @@ Void UpdateLayerInfo(CSmPlayer _Player, Integer _RunLast, Integer _RunBest) {
 
 // Create the timediff layer manialink
 Text CreateLayerTimeDiff() {	
-	return """<script><!--
+	return """
+<manialink version="1" name="Obstacle_LayerTimeDiff">
+	<script><!--
 		#Include "TextLib" as TextLib
 		
 		main() {
@@ -1419,7 +1444,8 @@ Text CreateLayerTimeDiff() {
 			<label id="Label_Time" posn="-0.5 0" scale="1.5" halign="right" valign="center2"/>
 			<label id="Label_Diff" posn="0.5 0" scale="1.1" halign="left" valign="center2"/>
 		</frame>
-	</frame>""";
+	</frame>
+</manialink>""";
 }
 
 // Update the timediff manialink
@@ -1710,7 +1736,9 @@ Void RestartPlayer(CSmPlayer _Player, Boolean _FullRestart, Boolean _Jump) {
 
 // Create utility layer manialink
 Text CreateLayerUtilities() {
-	declare Manialink = """<script><!--
+	declare Manialink = """
+<manialink version="1" name="Obstacle_LayerUtilities">
+	<script><!--
 		#Include "TextLib" as TextLib
 
 		#Const	C_UseNextMapVoting	{{{(S_NextMapVotingRatio > 0.0 && S_NextMapVotingRatio <= 1.0)}}}
@@ -1933,7 +1961,7 @@ Text CreateLayerUtilities() {
 	<frame id="{{{C_Module_RestartKey}}}" class="LibCustomUI_Module">
 		<label id="Label_Choose" posn="95 -87" halign="center" valign="center2" scale="0.7" style="CardButtonSmall" scriptevents="1" hidden="1"/>
 	</frame>
-""";
+</manialink>""";
 	return Manialink;
 }
 
@@ -2285,7 +2313,9 @@ Text GetRankings() {
 // Create manialink for items layer
 Text CreateLayerItems() {
 	declare ItemCount = G_ItemIdents.count;
-	declare Manialink = """<script><!--
+	declare Manialink = """
+<manialink version="1" name="Obstacle_LayerItems">
+	<script><!--
 		#Include "MathLib" as MathLib
 		#Include "TextLib" as TextLib
 		
@@ -2379,20 +2409,22 @@ Text CreateLayerItems() {
 				{{{CustomUI::InjectMLLoop()}}}
 			}
 		}
-		--></script>
-		<frame id="{{{C_Module_ItemsInfo}}}" class="LibCustomUI_Module">
-			<label id="Label_Info" posn="0 40" sizen="110 10" translate="1" halign="center" valign="center2" hidden="1" text="hi"/>
-		</frame>
-		<frame id="{{{C_Module_Items}}}" class="LibCustomUI_Module">
-			<framemodel id="Model_ItemGauge">
-				<gauge id="Gauge_Item" sizen="80 14" color="1c6b" style="EnergyBar" drawbg="0" drawblockbg="1" halign="center" valign="center2"/>
-				<label id="Label_Time" posn="0 -0.5" style="TextTitle1" textsize="2" halign="center" valign="center2"/>
-				<label id="Label_Item" posn="-36.5 -0.5" style="TextTitle1" textsize="1" translate="1" halign="left" valign="center2"/>
-			</framemodel>""";
+	--></script>
+	<frame id="{{{C_Module_ItemsInfo}}}" class="LibCustomUI_Module">
+		<label id="Label_Info" posn="0 40" sizen="110 10" translate="1" halign="center" valign="center2" hidden="1" text="hi"/>
+	</frame>
+	<frame id="{{{C_Module_Items}}}" class="LibCustomUI_Module">
+		<framemodel id="Model_ItemGauge">
+			<gauge id="Gauge_Item" sizen="80 14" color="1c6b" style="EnergyBar" drawbg="0" drawblockbg="1" halign="center" valign="center2"/>
+			<label id="Label_Time" posn="0 -0.5" style="TextTitle1" textsize="2" halign="center" valign="center2"/>
+			<label id="Label_Item" posn="-36.5 -0.5" style="TextTitle1" textsize="1" translate="1" halign="left" valign="center2"/>
+		</framemodel>""";
 	for (Index, 1, ItemCount) {
 		Manialink ^= """<frameinstance id="Frame_ItemGauge{{{Index}}}" posn="0 {{{-65 + Index * 8.3}}} -15" modelid="Model_ItemGauge" hidden="1"/>""";
 	}
-	Manialink ^= """</frame>""";
+	Manialink ^= """
+	</frame>
+</manialink>""";
 	return Manialink;
 }
 
