@@ -7,7 +7,7 @@
 #Extends "Modes/ShootMania/ModeMatchmaking.Script.txt"
 
 #Const	ScriptName			"SpeedBall.Script.txt"
-#Const	Version				"2.5.1 (2014-07-14)"
+#Const	Version				"2.5.2 (2014-07-15)"
 #Const	CompatibleMapTypes	"SpeedBallArena,SpeedBallTitleArena"
 
 
@@ -782,6 +782,7 @@ foreach (Event in PendingEvents) {
 					}
 				}
 			}
+			UpdateHud3dMarkers();
 			PassOn(Event);
 		}
 		default: {
@@ -1094,11 +1095,6 @@ UIManager.UILayerDestroyAll();
 	FUNCTIONS
 *****************************************************/
 
-// Initialize the player
-Void InitPlayer(CSmPlayer _Player) {
-	SetPlayerClan(_Player, MM_GetRequestedClan(_Player));
-}
-
 // Get all balls carried by the player
 CSmObject[] GetBalls(CSmPlayer _Player) {
 	declare Balls = CSmObject[];
@@ -1156,7 +1152,6 @@ Void UpdateHud3dMarkers() {
 	
 	// Set restriction
 	declare netwrite Boolean Net_RestrictBallMarker for Teams[0];
-//	declare netwrite Boolean Net_RestrictBallMarker for UIManager.UIAll;
 	Net_RestrictBallMarker = S_RestrictBallMarker;
 
 	// Ball marker
@@ -1165,7 +1160,8 @@ Void UpdateHud3dMarkers() {
 		declare BallObject <=> Objects[BallObjectId];
 		MarkersXml ^= """<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarker{{{Index}}}" box="0 1.2 0"/>
 			<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarkerHelp{{{Index}}}"
-				visibility="WhenVisible" box="0 1.2 0"/>""";
+				visibility="WhenVisible" box="0 1.2 0"/>
+			<marker objectid="{{{BallObject.Id}}}" label="{{{Now}}}" visibility="Never"/>""";
 	}
 	
 	// Gauge markers
@@ -1178,6 +1174,12 @@ Void UpdateHud3dMarkers() {
 	}
 
 	UIManager.UIAll.MarkersXML = MarkersXml;
+}
+
+// Initialize the player
+Void InitPlayer(CSmPlayer _Player) {
+	SetPlayerClan(_Player, MM_GetRequestedClan(_Player));
+	UpdateHud3dMarkers();
 }
 
 // Send hit message
