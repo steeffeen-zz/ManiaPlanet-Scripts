@@ -7,7 +7,7 @@
 #Extends "Modes/ShootMania/ModeMatchmaking.Script.txt"
 
 #Const	ScriptName			"SpeedBall.Script.txt"
-#Const	Version				"2.5.2 (2014-07-15)"
+#Const	Version				"2.5.3 (2014-07-15)"
 #Const	CompatibleMapTypes	"SpeedBallArena,SpeedBallTitleArena"
 
 
@@ -204,11 +204,7 @@ MM_SetFormat([S_NbPlayersPerTeam, S_NbPlayersPerTeam]);
 ***
 // Load objects
 ItemList_Begin();
-G_BallItemId = ItemList_Add("SpeedBall\\Ball3.Item.gbx");
-if (G_BallItemId == NullId) {
-	// Loading failed somehow, lets try again
-	G_BallItemId = ItemList_Add("SpeedBall\\Ball3.Item.gbx");
-}
+G_BallItemId = ItemList_Add("SpeedBall\\Ball.Item.gbx");
 ItemList_End();
 
 // Matchmaking mode
