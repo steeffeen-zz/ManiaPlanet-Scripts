@@ -1154,9 +1154,9 @@ Void UpdateHud3dMarkers() {
 	foreach (Index => BallObjectId in G_BallObjectsIds) {
 		if (!Objects.existskey(BallObjectId)) continue;
 		declare BallObject <=> Objects[BallObjectId];
-		MarkersXml ^= """<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarker{{{Index}}}" box="0 1.2 0"/>
-			<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarkerHelp{{{Index}}}"
-				visibility="WhenVisible" box="0 1.2 0"/>
+		MarkersXml ^= """
+			<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarker{{{Index}}}" box="0 1.2 0"/>
+			<marker objectid="{{{BallObject.Id}}}" manialinkframeid="Frame_BallMarkerHelp{{{Index}}}" visibility="WhenVisible" box="0 1.2 0"/>
 			<marker objectid="{{{BallObject.Id}}}" label="{{{Now}}}" visibility="Never"/>""";
 	}
 	
@@ -1164,8 +1164,9 @@ Void UpdateHud3dMarkers() {
 	foreach (Landmark in MapLandmarks_Gauge) {
 		if (Landmark.Tag != "Goal") continue;
 		if (Landmark.Order == 1 || Landmark.Order == 2) {
-			MarkersXml ^= """<marker manialinkframeid="Frame_GaugeMarker{{{Landmark.Order}}}" box="0 6.5 0" visibility="WhenInFrustum"
-				pos="{{{Landmark.Position[0]}}} {{{Landmark.Position[1]}}} {{{Landmark.Position[2]}}}"/>""";
+			MarkersXml ^= """
+				<marker manialinkframeid="Frame_GaugeMarker{{{Landmark.Order}}}" box="0 6.5 0" visibility="WhenInFrustum"
+					pos="{{{Landmark.Position[0]}}} {{{Landmark.Position[1]}}} {{{Landmark.Position[2]}}}"/>""";
 		}
 	}
 
@@ -1891,23 +1892,25 @@ Text CreateLayerExtra() {
 				declare ShowGauge = False;
 				if ((Net_StartTime > 0 && Net_StartTime < ArenaNow) || LastCapturedTime > 0) {
 					foreach (Index => GaugeLandmark in MapLandmarks_Gauge) {
-						if (Index == Net_BallLandmarkIndex || Net_BallLandmarkIndex < 0) continue;
-						if (GaugeLandmark.Gauge.ValueReal <= 0.) continue;
-						
-						declare Value = MathLib::FloorInteger(GaugeLandmark.Gauge.ValueReal * 100.);
-						if (Value <= 0) continue;
-						
-						if (Value >= 100 && !GaugeLandmark.Gauge.Captured) {
-							Value -= 1;
+						if (GaugeLandmark.Tag == "Goal" || GaugeLandmark.Tag == "Checkpoint") {
+							if (Index == Net_BallLandmarkIndex || Net_BallLandmarkIndex < 0) continue;
+							if (GaugeLandmark.Gauge.ValueReal <= 0.) continue;
+							
+							declare Value = MathLib::FloorInteger(GaugeLandmark.Gauge.ValueReal * 100.);
+							if (Value <= 0) continue;
+							
+							if (Value >= 100 && !GaugeLandmark.Gauge.Captured) {
+								Value -= 1;
+							}
+							Label_Capturing.Value = Value^"%";
+							Gauge_Capturing.SetRatio(GaugeLandmark.Gauge.ValueReal);
+							Gauge_Capturing.SetClan(GaugeLandmark.Gauge.Clan);
+							LastCapturedTime = Now;
+							if (GaugeLandmark.Gauge.Captured) {
+								LastCapturedTime += 500;
+							}
+							break;
 						}
-						Label_Capturing.Value = Value^"%";
-						Gauge_Capturing.SetRatio(GaugeLandmark.Gauge.ValueReal);
-						Gauge_Capturing.SetClan(GaugeLandmark.Gauge.Clan);
-						LastCapturedTime = Now;
-						if (GaugeLandmark.Gauge.Captured) {
-							LastCapturedTime += 500;
-						}
-						break;
 					}
 				}
 				if (LastCapturedTime + 650 > Now) {
@@ -2105,9 +2108,10 @@ Text CreateMarkersLayer() {
 				if (UpdateGauges) {
 					GaugeLandmarkIds.clear();
 					foreach (GaugeLandmark in MapLandmarks_Gauge) {
-						if (GaugeLandmark.Tag != "Goal") continue;
-						if (GaugeLandmark.Order == 1 || GaugeLandmark.Order == 2) {
-							GaugeLandmarkIds[GaugeLandmark.Order] = GaugeLandmark.Id;
+						if (GaugeLandmark.Tag == "Goal" || GaugeLandmark.Tag == "Checkpoint") {
+							if (GaugeLandmark.Order == 1 || GaugeLandmark.Order == 2) {
+								GaugeLandmarkIds[GaugeLandmark.Order] = GaugeLandmark.Id;
+							}
 						}
 					}
 				}
