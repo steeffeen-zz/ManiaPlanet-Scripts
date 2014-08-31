@@ -1,12 +1,12 @@
-/****************************************
-*	MapType for SpeedBallArena			*
-*	Author:		steeffeen				*
-*	Contact:	schteffens@gmail.com	*
-****************************************/
+/********************************************
+*	MapType for SpeedBallArena				*
+*	Author:		steeffeen					*
+*	Contact:	steeffeen@team-devota.com	*
+********************************************/
 
 #RequireContext CSmMapType
 
-#Const	Version	"1.3 (2013-04-25)"
+#Const	Version	"1.4 (2014-08-31)"
 
 #Include "TextLib" as TextLib
 #Include "Libs/Nadeo/Anchor.Script.txt" as Anchor
@@ -14,19 +14,12 @@
 #Const Rules """You must place exactly one Spawn #1 and one Spawn #2.
 
 You must place exactly one of each Goal, while:
-- Spawn #1 captures at Goal #2,
-- Spawn #2 captures at Goal #1 and
-- Goal #3 is the ball spawn
-
-The ForwardGoal can be captured by both teams to activate the ForwardSpawn (optional)"""
-
-#Const T_ForwardSpawn	"ForwardSpawn"
-#Const T_ForwardGoal	"ForwardGoal"
+- Goal #1 is captured by the Team of Spawn #2
+- Goal #2 is captured by the Team of Spawn #1
+- Goal #3 is the Ball Spawn"""
 
 // Check if the map is valid
 Void UpdateValidability() {
-	declare lol for This.Mode = 0;
-	log(This.Mode);
 	ValidationStatus = CSmMapType::ValidationStatus::NotValidable;
 	Anchor::UpdateAnchorCounts();
 	
@@ -41,18 +34,6 @@ Void UpdateValidability() {
 	}
 	if (!Anchor::HasExactlyOneAnchor("Goal", 3, "You must place exactly one Spawn #3 (Ball)!")) {
 		return;
-	}
-	
-	// Check for correct usage of forward spawn&goal
-	if (Anchor::HasAtLeastOneAnchor(T_ForwardSpawn, 0, "")) {
-		if (!Anchor::HasAtLeastOneAnchor(T_ForwardGoal, 0, """You must place a {{{T_ForwardGoal}}} if you have a {{{T_ForwardSpawn}}}!""")) {
-			return;
-		}
-	}
-	if (Anchor::HasAtLeastOneAnchor(T_ForwardGoal, 0, "")) {
-		if (!Anchor::HasAtLeastOneAnchor(T_ForwardSpawn, 0, """You must place a {{{T_ForwardSpawn}}} if you have a {{{T_ForwardGoal}}}!""")) {
-			return;
-		}
 	}
 	
 	// Check for unused spawns and goals
@@ -73,17 +54,13 @@ Void UpdateValidability() {
 
 // Return the manialink for spawn anchor edition
 Text EditSpawnAnchorManialink(Ident _EditedAnchorDataId) {
-	declare MLText = 		
-	"""
-	<script><!--
+	return """<script><!--
 		#Include "MathLib" as MathLib
 		#Include "TextLib" as TextLib
 		
 		main() {
-			declare Buttons = [
-				(Page.GetFirstChild("1") as CMlLabel), 
-				(Page.GetFirstChild("2") as CMlLabel),
-				(Page.GetFirstChild("{{{T_ForwardSpawn}}}") as CMlLabel)];
+			declare Buttons = [	(Page.GetFirstChild("1") as CMlLabel), 
+								(Page.GetFirstChild("2") as CMlLabel)];
 			
 			declare Text AnchorTag for Page;
 			declare Integer AnchorOrder for Page;
@@ -106,11 +83,6 @@ Text EditSpawnAnchorManialink(Ident _EditedAnchorDataId) {
 						case CMlEvent::Type::MouseClick : {
 							switch (Event.ControlId) {
 								case "Cancel": {
-									
-								}
-								case "{{{T_ForwardSpawn}}}": {
-									AnchorTag = Event.ControlId;
-									AnchorOrder = 0;
 								}
 								default: {
 									AnchorTag = "Spawn";
@@ -126,44 +98,34 @@ Text EditSpawnAnchorManialink(Ident _EditedAnchorDataId) {
 	--></script>
 	<frame posn="120 40">
 		<quad posn="0 0 2" sizen="72 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
-		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffEdit Spawn"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" translate="1" textprefix="$fff" text="Edit Spawn"/>
 		
 		<quad posn="0 0 -1" sizen="68 28" halign="center" style="Bgs1" substyle="BgWindow2"/>
 		<frame posn="0 -4">
-			<label id="1" posn="-10 0" scale="2" halign="left" style="TextButtonMedium" ScriptEvents="true"/>
-			<label id="2" posn="10 0" scale="2" halign="right" style="TextButtonMedium" ScriptEvents="true"/>
-			<label id="{{{T_ForwardSpawn}}}" posn="0 -8" scale="1.2" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
-			<label id="Cancel" text="Cancel" posn="0 -15" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+			<label id="1" posn="-10 0" scale="1.5" halign="left" style="TextValueBig" scriptevents="1"/>
+			<label id="2" posn="10 0" scale="1.5" halign="right" style="TextValueBig" scriptevents="1"/>
+			<label id="Cancel" posn="0 -15" halign="center" style="CardButtonSmall" scriptevents="1" translate="1" text="Cancel"/>
 		</frame>
     </frame>
 	<frame posn="120 -3">
 		<quad posn="0 0 2" sizen="72 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
-		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffRules"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" translate="1" textprefix="$fff" text="Rules"/>
 		
-		<quad posn="0 0 -1" sizen="68 51" halign="center" style="Bgs1" substyle="BgWindow2"/>
-		<frame posn="-30 -4">
-			<label posn="0 0" sizen="60 5" autonewline="1" style="TextCardSmallScores2" text="$333{{{Rules}}}"/>
-		</frame>
-	</frame>
-	""";
-  
-	return MLText;
+		<quad posn="0 0 -1" sizen="68 42" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<label posn="-30 -4" sizen="60 5" autonewline="1" style="TextCardSmallScores2" translate="1" textprefix="$ddd" text="{{{Rules}}}"/>
+	</frame>""";
 }
 
 // Return the manialink for goal anchor edition
 Text EditGoalAnchorManialink(Ident _EditedAnchorDataId) {
-	declare MLText = 		
-	"""
-	<script><!--
+	return """<script><!--
 		#Include "MathLib" as MathLib
 		#Include "TextLib" as TextLib
 		
 		main() {
-			declare Buttons = [
-				(Page.GetFirstChild("1") as CMlLabel),
-				(Page.GetFirstChild("2") as CMlLabel),
-				(Page.GetFirstChild("3") as CMlLabel),
-				(Page.GetFirstChild("{{{T_ForwardGoal}}}") as CMlLabel)];
+			declare Buttons = [	(Page.GetFirstChild("1") as CMlLabel),
+								(Page.GetFirstChild("2") as CMlLabel),
+								(Page.GetFirstChild("3") as CMlLabel)];
 			
 			declare Text AnchorTag for Page;
 			declare Integer AnchorOrder for Page;
@@ -186,11 +148,6 @@ Text EditGoalAnchorManialink(Ident _EditedAnchorDataId) {
 						case CMlEvent::Type::MouseClick : {
 							switch (Event.ControlId) {
 								case "Cancel": {
-									
-								}
-								case "{{{T_ForwardGoal}}}": {
-									AnchorTag = Event.ControlId;
-									AnchorOrder = 0;
 								}
 								default: {
 									AnchorTag = "Goal";
@@ -206,29 +163,23 @@ Text EditGoalAnchorManialink(Ident _EditedAnchorDataId) {
 	--></script>
 	<frame posn="120 40">
 		<quad posn="0 0 2" sizen="72 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
-		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffEdit Goal"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" translate="1" textprefix="$fff" text="Edit Goal"/>
 		
 		<quad posn="0 0 -1" sizen="68 28" halign="center" style="Bgs1" substyle="BgWindow2"/>
 		<frame posn="0 -4">
-			<label id="1" posn="-12 0" scale="2" halign="left" style="TextButtonMedium" ScriptEvents="true"/>
-			<label id="2" posn="0 0" scale="2" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
-			<label id="3" posn="12 0" scale="2" halign="right" style="TextButtonMedium" ScriptEvents="true"/>
-			<label id="{{{T_ForwardGoal}}}" posn="0 -8" scale="1.2" halign="center" style="TextButtonMedium" ScriptEvents="true"/>
-			<label id="Cancel" text="Cancel" posn="0 -15" halign="center" style="CardButtonSmall" ScriptEvents="true"/>
+			<label id="1" posn="-14 0" scale="1.4" halign="left" style="TextValueBig" scriptevents="1"/>
+			<label id="2" posn="0 0" scale="1.4" halign="center" style="TextValueBig" scriptevents="1"/>
+			<label id="3" posn="14 0" scale="1.4" halign="right" style="TextValueBig" scriptevents="1"/>
+			<label id="Cancel" posn="0 -15" halign="center" style="CardButtonSmall" scriptevents="1" translate="1" text="Cancel"/>
 		</frame>
     </frame>
 	<frame posn="120 -3">
 		<quad posn="0 0 2" sizen="72 15" halign="center" valign="bottom" style="Bgs1InRace" substyle="BgTitle3_5"/>
-		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" text="$fffRules"/>
+		<label posn="0 5 3" halign="center" valign="bottom" style="TextTitle3" translate="1" textprefix="$fff" text="Rules"/>
 		
-		<quad posn="0 0 -1" sizen="68 51" halign="center" style="Bgs1" substyle="BgWindow2"/>
-		<frame posn="-30 -3">
-			<label posn="0 0" sizen="60 5" autonewline="1" style="TextCardSmallScores2" text="$333{{{Rules}}}"/>
-		</frame>
-	</frame>
-	""";
-  
-	return MLText;
+		<quad posn="0 0 -1" sizen="68 42" halign="center" style="Bgs1" substyle="BgWindow2"/>
+		<label posn="-30 -3" sizen="60 5" autonewline="1" style="TextCardSmallScores2" translate="1" textprefix="$ddd" text="{{{Rules}}}"/>
+	</frame>""";
 }
 
 // Show the anchor edition manialink
