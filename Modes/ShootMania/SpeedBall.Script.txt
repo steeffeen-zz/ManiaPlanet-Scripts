@@ -7,7 +7,7 @@
 #Extends "Modes/ShootMania/ModeMatchmaking.Script.txt"
 
 #Const	ScriptName			"SpeedBall.Script.txt"
-#Const	Version				"2.5.3 (2014-07-15)"
+#Const	Version				"2.6 (2014-09-01)"
 #Const	CompatibleMapTypes	"SpeedBallArena,SpeedBallTitleArena"
 
 
@@ -38,7 +38,7 @@
 // Rounds
 #Setting	S_TimeLimitNormal			180		as _("Duration Normal Phase (Seconds)")
 #Setting	S_TimeLimitReduction		120		as _("Duration Reduction Phase (Seconds)")
-#Setting	S_TimeLimitInstant			300		as _("Duration Instant Phase (Seconds)")
+#Setting	S_TimeLimitInstant			240		as _("Duration Instant Phase (Seconds)")
 #Setting	S_RoundsToWin				5		as _("Rounds to win a Map")
 #Setting	S_RoundGapToWin				2		as _("Rounds Gap to win a Map")
 #Setting	S_RoundsLimit				10		as _("Total Rounds Limit per Map (First Team reaching X wins)")
@@ -127,6 +127,7 @@
 declare	Integer[Integer]		G_ClanMapScores;			// Won maps of each clan
 declare	Integer					G_Phase;					// Current gameplay phase (0: normal, 1: reduction, 2: instant)
 declare	Ident					G_BallItemId;				// Id of ball item
+declare Ident					G_RocketBallActionId;		// Id of ball rocket action
 declare Ident[]					G_BallObjectsIds;			// Ids of all ball objects
 declare	Integer					G_LastUIUpdate;				// Time when the last UI refresh was performed
 declare	Ident					G_BallLandmarkId;			// Id of the ball landmark
@@ -206,6 +207,11 @@ MM_SetFormat([S_NbPlayersPerTeam, S_NbPlayersPerTeam]);
 ItemList_Begin();
 G_BallItemId = ItemList_Add("SpeedBall\\Ball.Item.gbx");
 ItemList_End();
+
+// Load actions
+ActionList_Begin();
+G_RocketBallActionId = ActionList_Add("SpeedBall\\RocketBall.Action.Gbx");
+ActionList_End();
 
 // Matchmaking mode
 if (MM_IsMatchServer()) {
@@ -479,7 +485,7 @@ foreach (BallObjectId in G_BallObjectsIds) {
 	declare BallObject <=> Objects[BallObjectId];
 	ResetBall(BallObject, False);
 }
-UpdateBaseClans();
+UpdateBallBaseClan();
 G_MaxCapturePercentage = [1 => 0., 2 => 0.];
 
 // Update markers
@@ -560,10 +566,13 @@ foreach (Player in Players) {
 					// Ball carrier!
 					Player.EnergyLevel = 1.;
 					Player.ArmorReplenishGain = C_BallCarrierArmorReplenishGain;
+					//ActionBind(Player, CSmMode::EActionSlot::Slot_A, CSmMode::EActionInput::Weapon);
 				} else {
 					// Usual player (without ball)
 					Player.EnergyLevel = C_PlayerHighlightValue;
 					Player.ArmorReplenishGain = 0;
+					//ActionBind(Player, CSmMode::EActionSlot::Slot_A, CSmMode::EActionInput::None);
+					
 					// Reduce armor to even values if the player has partly regenerated armor
 					if (Player.Armor > 100 && Player.Armor < 200) {
 						Player.Armor = 100;
@@ -598,64 +607,7 @@ foreach (Event in PendingEvents) {
 			}
 		}
 		case CSmModeEvent::EType::OnHit: {
-			if (Event.Shooter == Null || Event.Victim == Null || Event.Shooter == Event.Victim) {
-				Discard(Event);
-			} else {
-				if (!S_ThrowableBall && HasBalls(Event.Shooter) > 0) {
-					// Ball carrier hit someone -> Pass the ball
-					if (PassBall(Event.Shooter, Event.Victim, GetBall(Event.Shooter))) {
-						SBXmlRpc::OnPass(Event);
-					}
-					SendHitMessage(Event, True);
-					Discard(Event);
-				} else {
-					declare TeamHit = (Event.Shooter.CurrentClan == Event.Victim.CurrentClan);
-					if (TeamHit && !S_FriendlyFire) {
-						// Discard team hit
-						Discard(Event);
-					} else {
-						// Perform hit
-						declare VictimHasBall = (HasBalls(Event.Victim) > 0);
-						if (S_ReduceLaserDamage || VictimHasBall) {
-							Event.Damage = 100;
-						}
-						// Calculate points
-						declare Points = 1;
-						if (TeamHit) Points *= -1;
-						if (VictimHasBall) {
-							Points *= 2;
-						}
-						// Grant points & update stats
-						Event.ShooterPoints = Points;
-						AddPoints(Event.Shooter, Points);
-						if (TeamHit) {
-							UpdateBackStabs(Event.Shooter, -Points);
-							// Show team hit warning
-							if (C_NbTeamHitMessage != 0) {
-								declare NbTeamHitMessage for Event.Shooter = 0;
-								if (C_NbTeamHitMessage < 0 || NbTeamHitMessage < C_NbTeamHitMessage) {
-									Message::SendStatusMessage(Event.Shooter, TextLib::Compose("$f80%1", _("Attention! You shot a Team Member!")),
-										2500, 0);
-									NbTeamHitMessage += 1;
-								}
-							}
-						} else {
-							if (VictimHasBall) UpdateBallHits(Event.Shooter, 1);
-							UpdateDamage(Event.Shooter, Event.Damage / 100);
-							UpdateStatDamage(Event.Shooter.CurrentClan - 1, Event.Damage / 100);
-							if (!Event.Shooter.IsFakePlayer) {
-								XmlRpc::OnHit(Event);
-							}
-						}
-						// Kill victim if he hasn't full armor
-						if (Event.Victim.Armor < 200) {
-							Event.Damage = Event.Victim.Armor;
-						}
-						SendHitMessage(Event, False);
-						PassOn(Event);
-					}
-				}
-			}
+			HandleOnHit(Event);
 		}
 		case CSmModeEvent::EType::OnPlayerRequestRespawn: {
 			if (Event.Player == Null) {
@@ -741,6 +693,17 @@ foreach (Event in PendingEvents) {
 				declare Integer DropTime for Event.Object;
 				DropTime = Now + 3000;
 				PassOn(Event);
+			}
+		}
+		case CSmModeEvent::EType::OnActionCustomEvent: {
+			switch (Event.Param1) {
+				case "damage": {
+					// OnHit
+					HandleOnHit(Event);
+				}
+				default: {
+					Discard(Event);
+				}
 			}
 		}
 		case CSmModeEvent::EType::OnCommand: {
@@ -1176,6 +1139,7 @@ Void UpdateHud3dMarkers() {
 // Initialize the player
 Void InitPlayer(CSmPlayer _Player) {
 	SetPlayerClan(_Player, MM_GetRequestedClan(_Player));
+	ActionLoad(_Player, CSmMode::EActionSlot::Slot_A, G_RocketBallActionId);
 	UpdateHud3dMarkers();
 }
 
@@ -1187,6 +1151,7 @@ Void SendHitMessage(CSmModeEvent _Event, Boolean _Pass) {
 	if (Distance < C_HitMessageMinDist) return;
 	declare UI <=> UIManager.GetUI(_Event.Shooter);
 	if (UI == Null) return;
+	
 	// Send message
 	Distance = MathLib::NearestInteger(Distance * 10) / 10.;
 	declare Text Message;
@@ -1566,29 +1531,29 @@ Void MySpawnPlayer(CSmPlayer _Player) {
 	SM::SpawnPlayer(_Player, _Player.RequestedClan, MapLandmarks_PlayerSpawn[SpawnIds[SpawnIndex]].PlayerSpawn, SpawnTime);
 }
 
-// Set clans of spawns and gauges at start of map and each round (changing sides)
-Void AssignSpawnsGaugesClans() {
-	// SPAWNS
-	// Change sides
-	declare FirstSpawns = G_ClanSpawnLandmarkIds[1];
-	G_ClanSpawnLandmarkIds[1] = G_ClanSpawnLandmarkIds[2];
-	G_ClanSpawnLandmarkIds[2] = FirstSpawns;
-	// Assign clans
-	foreach (Clan => SpawnLandmarkIds in G_ClanSpawnLandmarkIds) {
-		foreach (Index => Id in SpawnLandmarkIds) {
-			switch (MapLandmarks_PlayerSpawn[Id].Base.Clan) {
-				case 0: {
-					if (Clan != 3) {
-						MapLandmarks_PlayerSpawn[Id].Base.Clan = Clan;
-					}
-				}
-				default: {
-					MapLandmarks_PlayerSpawn[Id].Base.Clan = 3 - MapLandmarks_PlayerSpawn[Id].Base.Clan;
-				}
-			}
+// Update clans of bases
+Void UpdateBallBaseClan() {
+	if (!G_BallObjectsIds.existskey(0) || !Objects.existskey(G_BallObjectsIds[0])) return;
+	declare BallObject <=> Objects[G_BallObjectsIds[0]];
+	if (G_BallObjectsIds.count > 1 || BallObject.Player == Null) {
+		// Ball dropped - Reset base clan of the ball landmark
+		if (MapLandmarks_Gauge.existskey(G_BallLandmarkId)) {
+			declare BallLandmark <=> MapLandmarks_Gauge[G_BallLandmarkId];
+			BallLandmark.Base.Clan = 0;
+			BallLandmark.Gauge.Clan = 0;
+		}
+	} else {
+		// A clan carries the ball - Set carrying clan to ball landmark
+		if (MapLandmarks_Gauge.existskey(G_BallLandmarkId)) {
+			declare BallLandmark <=> MapLandmarks_Gauge[G_BallLandmarkId];
+			BallLandmark.Base.Clan = BallObject.Player.CurrentClan;
+			BallLandmark.Gauge.Clan = BallObject.Player.CurrentClan;
 		}
 	}
-	
+}
+
+// Set clans of spawns and gauges at start of map and each round (changing sides)
+Void AssignSpawnsGaugesClans() {
 	// GAUGES
 	// Edit ball gauge
 	if (MapLandmarks_Gauge.existskey(G_BallLandmarkId)) {
@@ -1624,40 +1589,22 @@ Void AssignSpawnsGaugesClans() {
 			}
 		}
 	}
-}
-
-// Update clans of bases
-Void UpdateBaseClans() {
-	if (!G_BallObjectsIds.existskey(0) || !Objects.existskey(G_BallObjectsIds[0])) return;
-	declare BallObject <=> Objects[G_BallObjectsIds[0]];
-	if (G_BallObjectsIds.count > 1 || BallObject.Player == Null) {
-		// Ball dropped - Reset base clan of the ball landmark
-		if (MapLandmarks_Gauge.existskey(G_BallLandmarkId)) {
-			declare BallLandmark <=> MapLandmarks_Gauge[G_BallLandmarkId];
-			BallLandmark.Base.Clan = 0;
-			BallLandmark.Gauge.Clan = 0;
-		}
-	} else {
-		// A clan carries the ball - Set carrying clan to ball landmark
-		if (MapLandmarks_Gauge.existskey(G_BallLandmarkId)) {
-			declare BallLandmark <=> MapLandmarks_Gauge[G_BallLandmarkId];
-			BallLandmark.Base.Clan = BallObject.Player.CurrentClan;
-			BallLandmark.Gauge.Clan = BallObject.Player.CurrentClan;
-		}
-		
-		// Bases screw things up on some maps - Perform fix if needed
-		if (G_ClanGaugeLandmarkIds.existskey(1) && MapLandmarks_Gauge.existskey(G_ClanGaugeLandmarkIds[1])
-			&& G_ClanGaugeLandmarkIds.existskey(2) && MapLandmarks_Gauge.existskey(G_ClanGaugeLandmarkIds[2])) {
-			if (MapLandmarks_Gauge[G_ClanGaugeLandmarkIds[1]].Base == MapLandmarks_Gauge[G_ClanGaugeLandmarkIds[2]].Base) {
-				// Gauges of the teams share the same base
-				// Change the clan of the base to the clan currently carrying the ball
-				if (G_ClanGaugeLandmarkIds.existskey(BallObject.Player.CurrentClan)
-					&& MapLandmarks_Gauge.existskey(G_ClanGaugeLandmarkIds[BallObject.Player.CurrentClan])) {
-					MapLandmarks_Gauge[G_ClanGaugeLandmarkIds[BallObject.Player.CurrentClan]].Base.Clan = BallObject.Player.CurrentClan;
-				}
-			}
+	
+	// SPAWNS
+	// Change sides
+	declare FirstSpawns = G_ClanSpawnLandmarkIds[1];
+	G_ClanSpawnLandmarkIds[1] = G_ClanSpawnLandmarkIds[2];
+	G_ClanSpawnLandmarkIds[2] = FirstSpawns;
+	
+	// Assign clans
+	foreach (Clan => SpawnLandmarkIds in G_ClanSpawnLandmarkIds) {
+		foreach (Index => Id in SpawnLandmarkIds) {
+			MapLandmarks_PlayerSpawn[Id].Base.Clan = Clan;
 		}
 	}
+	
+	// BALL
+	UpdateBallBaseClan();
 }
 
 // Player picks up the ball
@@ -1678,7 +1625,7 @@ Boolean PickUpBall(CSmPlayer _Player, CSmObject _Object) {
 		GetColorizedPlayerName(_Player), "$<"^Teams[_Player.CurrentClan - 1].ColorText, "$>"),
 		3000, 2, CUIConfig::EUISound::PhaseChange, 0);
 	AddPoints(_Player, 2);
-	UpdateBaseClans();
+	UpdateBallBaseClan();
 	
 	return True;
 }
@@ -1694,7 +1641,7 @@ Void ResetBall(CSmObject _Ball, Boolean _SendMessage) {
 	declare Boolean AtHome for _Ball;
 	AtHome = True;
 	
-	UpdateBaseClans();
+	UpdateBallBaseClan();
 
 	if (_SendMessage) {
 		Message::SendBigMessage(_("The Ball has been reset!"), 3000, 1, CUIConfig::EUISound::PhaseChange, 1);
@@ -1721,7 +1668,7 @@ Void DropBall(CSmObject _Ball, Vec3 _Position) {
 	Message::SendBigMessage(Message, 3000, 2, CUIConfig::EUISound::PhaseChange, 0);
 	
 	_Ball.SetPositionAndVel(_Position + <0., 1., 0.>, <0., 1., 0.>);
-	UpdateBaseClans();
+	UpdateBallBaseClan();
 }
 
 // Drop all balls carried by the player
@@ -1764,7 +1711,7 @@ Boolean PassBall(CSmPlayer _Shooter, CSmPlayer _Victim, CSmObject _Ball) {
 	
 	if (_Shooter.CurrentClan != _Victim.CurrentClan) {
 		// Pass to opponent
-		UpdateBaseClans();
+		UpdateBallBaseClan();
 		return False;
 	}
 	
@@ -2395,4 +2342,87 @@ Void DoWarmup() {
 	if (MB_UseScriptCallbacks) XmlRpc::EndWarmUp();
 	
 	MM_Sleep(1000);
+}
+
+// Handle OnHit and Action events
+Void HandleOnHit(CSmModeEvent _Event) {
+	if (_Event.Shooter == Null || _Event.Victim == Null || _Event.Shooter == _Event.Victim) {
+		Discard(_Event);
+		return;
+	}
+	
+	if (!S_ThrowableBall && HasBalls(_Event.Shooter) > 0) {
+		// Ball carrier hit someone -> Pass the ball
+		if (PassBall(_Event.Shooter, _Event.Victim, GetBall(_Event.Shooter))) {
+			SBXmlRpc::OnPass(_Event);
+		}
+		SendHitMessage(_Event, True);
+		Discard(_Event);
+		return;
+	}
+	
+	declare TeamHit = (_Event.Shooter.CurrentClan == _Event.Victim.CurrentClan);
+	if (TeamHit && !S_FriendlyFire) {
+		// Discard team hit
+		Discard(_Event);
+		return;
+	}
+	
+	// Check for action event
+	declare IsActionEvent = (_Event.Type == CSmModeEvent::EType::OnActionCustomEvent);
+	
+	// Convert action params to usual data
+	declare Damage = _Event.Damage;
+	if (_Event.Param2.count > 0) {
+		Damage = TextLib::ToInteger(_Event.Param2[0]);
+	}
+	
+	// Perform hit
+	declare VictimHasBall = (HasBalls(_Event.Victim) > 0);
+	if (S_ReduceLaserDamage || VictimHasBall) {
+		Damage = 100;
+	}
+	// Calculate points
+	declare Points = 1;
+	if (TeamHit) {
+		Points *= -1;
+	}
+	if (VictimHasBall) {
+		Points *= 2;
+	}
+	// Grant points & update stats
+	_Event.ShooterPoints = Points;
+	AddPoints(_Event.Shooter, Points);
+	if (TeamHit) {
+		UpdateBackStabs(_Event.Shooter, -Points);
+		// Show team hit warning
+		if (C_NbTeamHitMessage != 0) {
+			declare NbTeamHitMessage for _Event.Shooter = 0;
+			if (C_NbTeamHitMessage < 0 || NbTeamHitMessage < C_NbTeamHitMessage) {
+				Message::SendStatusMessage(_Event.Shooter, TextLib::Compose("$f80%1", _("Attention! You shot a Team Member!")), 2500, 0);
+				NbTeamHitMessage += 1;
+			}
+		}
+	} else {
+		if (VictimHasBall) {
+			UpdateBallHits(_Event.Shooter, 1);
+		}
+		UpdateDamage(_Event.Shooter, Damage / 100);
+		UpdateStatDamage(_Event.Shooter.CurrentClan - 1, Damage / 100);
+		if (!_Event.Shooter.IsFakePlayer) {
+			XmlRpc::OnHit(_Event);
+		}
+	}
+	// Kill victim if he hasn't full armor
+	if (_Event.Victim.Armor < 200) {
+		Damage = _Event.Victim.Armor;
+	}
+	SendHitMessage(_Event, False);
+	
+	_Event.Damage = Damage;
+	PassOn(_Event);
+	
+	if (IsActionEvent) {
+		RemovePlayerArmor(_Event.Victim, Damage, _Event.Shooter, Points);
+	}
 }
