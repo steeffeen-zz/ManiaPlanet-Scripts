@@ -9,6 +9,12 @@
 #Const SoloScriptName	"ObstacleSolo.Script.txt"
 #Const SoloVersion		"1.1 (2014-06-28)"
 
+#Setting	S_FastRespawn			False
+#Setting	S_FastRespawnOldMap		False
+#Setting	S_RespawnPenalty		0
+#Setting	S_AllowJump				False
+#Setting	S_DisplayMedals			False
+
 /***************************************************
 	LABELS
 ***************************************************/
@@ -90,7 +96,7 @@ declare RunNew = 0;
 
 RunNew = Now - Net_StartTime;
 RunLast = RunNew;
-UpdateLayerTimeDiff(_Player, RunNew, RunBest);
+UpdateLayerTimeDiff(_Player, RunNew, RunBest, -1, -1);
 
 // Check best time
 if (RunNew < RunBest || RunBest < 0) {
