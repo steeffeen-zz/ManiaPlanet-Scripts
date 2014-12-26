@@ -13,13 +13,14 @@
 #Include "MathLib" as MathLib
 #Include "TextLib" as TextLib
 #Include "Libs/Nadeo/Anchor.Script.txt" as Anchor
+#Include "Libs/Nadeo/MapType.Script.txt" as MapType
 
 /***************************************************
 	CONSTANTS
 ***************************************************/
 
 #Const	ScriptName	"ObstacleTitleArena.Script.txt"
-#Const	Version		"3.4 (2014-07-15)"
+#Const	Version		"3.5 (2014-12-18)"
 
 /***************************************************
 	GLOBALES
@@ -40,6 +41,8 @@ log("Version: "^Version);
 
 ***StartScript***
 ***
+MapType::SetVersion(2);
+
 CustomEditAnchorData = True;
 
 {
@@ -90,6 +93,14 @@ UILayerDestroyAll();
 	FUNCTIONS
 ***************************************************/
 
+// Save default tag in the anchor's metadata
+Void SaveAnchorMetadata(CAnchorData _Anchor) {
+	if (_Anchor == Null) return;
+	
+	declare metadata DefaultTag for _Anchor = "";
+	DefaultTag = _Anchor.DefaultTag;
+}
+
 // Initialize the anchors
 Void InitAnchors() {
 	G_StartSpawnId = NullId;
@@ -103,6 +114,7 @@ Void InitAnchors() {
 			}
 		}
 		G_KnownIds.add(Data.Id);
+		SaveAnchorMetadata(Data);
 	}
 }
 
@@ -204,6 +216,8 @@ Void UpdateAnchors() {
 			}
 			G_KnownIds.add(Data.Id);
 		}
+		
+		SaveAnchorMetadata(Data);
 	}
 }
 
@@ -289,7 +303,7 @@ Void EditGoalAnchor(CAnchorData _Anchor) {
 			<label id="CheckpointType1" posn="-31 -16" scale="0.8" halign="left" style="TextButtonMedium" ScriptEvents="1"/>
 			<label id="CheckpointType2" posn="33 -16" scale="0.8" halign="right" style="TextButtonMedium" ScriptEvents="1"/>
 			<label id="CheckpointType3" posn="0 -20" scale="0.8" halign="center" style="TextButtonMedium" ScriptEvents="1"/>
-			<format textcolor="00fc"/>
+			<format textcolor="55fc" textemboss="1" />
 			<label posn="-11 -27" text="Order:" translate="1" valign="center"/>
 			<entry id="OrderEntry" posn="15 -27.5" sizen="10 4.7" halign="right" valign="center" default="0" ScriptEvents="1"/>
 		</frame>
@@ -386,7 +400,7 @@ Void EditSpawnAnchor(CAnchorData _Anchor) {
 			<label id="Spawn" posn="0 -6" scale="1.4" halign="center" style="TextButtonMedium" ScriptEvents="1"/>
 			<label id="SpawnType1" posn="-5 -14" scale="0.8" halign="right" style="TextButtonMedium" ScriptEvents="1"/>
 			<label id="SpawnType2" posn="5 -14" scale="0.8" halign="left" style="TextButtonMedium" ScriptEvents="1"/>
-			<format textcolor="00fc"/>
+			<format textcolor="55fc" textemboss="1" />
 			<label posn="-11 -22" text="Order:" translate="1" valign="center"/>
 			<entry id="OrderEntry" posn="15 -22.5" sizen="10 4.7" halign="right" valign="center" default="0" ScriptEvents="1"/>
 		</frame>
